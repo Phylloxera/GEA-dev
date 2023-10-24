@@ -1,2 +1,7 @@
 # GEA-dev
-## initialized with a singularityCE/apptainer definition file (gea2.def) for creating the container for running the pipeline
+## dependencies
+  * [apptainer](https://apptainer.org)
+## help
+  * curl -L -O https://github.com/Phylloxera/GEA-dev/releases/download/geacont/geacont.tgz
+  * tar -xzvf geacont.tgz
+  * apptainer run-help containers/geacont
