@@ -15,8 +15,6 @@ Characterization of *S. enterica* and *E. coli* genomes using High Performance C
   * tar -xzvf geacont.tgz
   * apptainer run-help geacont
 
-## support
-
-https://github.com/Phylloxera/GEA-dev/issues
+## [support](https://github.com/Phylloxera/GEA-dev/issues)
 
 ## [manual](https://github.com/Phylloxera/GEA-dev/wiki)
