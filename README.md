@@ -19,7 +19,4 @@ Characterization of *S. enterica* and *E. coli* genomes using High Performance C
 
 https://github.com/Phylloxera/GEA-dev/issues
 
-## manual
-
-*coming soon*
-
+## [manual](https://github.com/Phylloxera/GEA-dev/wiki)
