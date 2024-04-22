@@ -1,6 +1,6 @@
 #!/bin/bash
 
-###GEAbash (Gammaproteobacteria Epidemiologic Annotation) data processing bash script
+###GEAbash (Gammaproteobacteria Epidemiologic Annotation) data processing bash script. v0.0.2
 
 #init vars
 workdir=$(pwd); username=$(whoami); echo "GEAbash is being run by $username"; input=''; platform="MiSeq"; project="NA"; overwrite=F; ucge=T; runtime=24:00:00; hpcmem=360GB
@@ -28,7 +28,7 @@ while getopts ':i:t::u::o::p::j::q::r::m::c::s::a::h::' flag; do #leading colon 
     *) print_usage
        exit 1 ;;    esac; done
 #GEAbash help message. print if no input
-if [[ -n "$input" ]]; then :; else echo -n "GEAbash(Gammaproteobacteria Epidemiologic Annotation) data processing bash script version 0.0.1 by aaron dickey aaron<dot>dickey"
+if [[ -n "$input" ]]; then :; else echo -n "GEAbash(Gammaproteobacteria Epidemiologic Annotation) data processing bash script version 0.0.2 by aaron dickey aaron<dot>dickey"
 echo "<at>usda.gov"; echo "command structure: '$HOME/software/GEAbash -i <raw data input> <optional variables>'"; echo -n 'run example: $HOME/software/GEAbash -i '; echo \
 '$HOME/data/Manita/upgrade/folin2" > log 2>&1 &'; echo -n "-i input   required  can be 1-or-more input folders of illumina raw read gzipped fastq files and/or assemblies. "
 echo "Separate multiple inputs by commas."; echo -n "-t taxon   optional  default both  what is the taxon of the input, both or ecoli or senterica. By default, GEAbash "
@@ -161,17 +161,18 @@ ${shovill}${lib}/contigs.fa ${contigfolder}${lib}.fa; mv ${shovill}${lib}/shovil
 ${spades}${lib}_spades.fasta; mv ${shovill}${lib}/contigs.gfa ${sgfa}${lib}_contigs.gfa; mv ${shovill}${lib}/shovill.log ${shlog}${lib}_shovill.log; cd ${shovill}; rm \
 -r ${shovill}${lib}; rm ${shovill}${lib}_debug; else mv ${shovill}${lib}/shovill.log ${shlog}${lib}_shovill.log; cd ${shovill}; rm -r ${shovill}${lib}; rm \
 ${shovill}${lib}_debug; echo "shovill did not produce contigs from $lib. see ${shlog}${lib}_shovill.log for details."; fi; else echo -n "shovill not run for $lib. check "
-echo "${shovill}${lib}_debug for more information."; fi; for lib in ${library[*]}; do if [[ -f ${contigfolder}${lib}.fa ]]
-then if [[ $(cat ${contigfolder}${lib}.fa | wc -l) -eq 0 ]]; then rm ${contigfolder}${lib}.fa; echo -n "shovill did not produce contigs from $lib. see "; echo \
-"${shlog}${lib}_shovill.log for details."; fi; fi; done; if [[ $(ls ${contigfolder} 2> /dev/null | wc -l) -eq 0 ]] ; then echo -n "assembly with shovill did not produce any "
-echo "contigs for downstream annotation. exiting"; exit 1; fi; done; cd ${skesa}; skes_cores=$(apptainer exec $cont bc <<<"$nprocs/$shov_par"); for lib in ${library[*]}
-do max_bg_procs $shov_par; apptainer exec $cont skesa --reads ${grouped}${lib}_R1.fq.gz,${grouped}${lib}_R2.fq.gz --cores $skes_cores \
---memory $shov_ram > ${lib}.skesa.fa 2>"${lib}_skesa.log" & done; wait; for lib in ${library[*]}; do if [[ -f ${lib}.skesa.fa ]]
-then if [[ $(cat ${lib}.skesa.fa | wc -l) -eq 0 ]]; then rm ${lib}.skesa.fa; echo -n "skesa did not produce contigs from $lib so plasmids can not be searched in the skesa "
-echo "assembly. see ${skesa}${lib}_skesa.log for details."; fi; else echo "skesa did not create ${lib}.skesa.fa. check ${skesa}${lib}_skesa.log for details"; fi; done
-for lib in ${library[*]}; do if [[ -f ${lib}.skesa.fa ]]; then grep -A 1 "Circ" ${lib}.skesa.fa > ${lib}_plas.fa; fi; if [[ $(cat ${lib}_plas.fa | wc -l) -eq 0 ]]; then rm \
-${lib}_plas.fa; fi; done; for lib in ${library[*]}; do if [[ -f ${lib}.plas.fa ]]; then apptainer exec $cont perl -pi -e "s/^>/>${lib}-/g" ${lib}_plas.fa; fi; done; cat \
-*_plas.fa > ${result}skesa_plasmids.fa; END_TIME=$(date +%s); echo "elapsed time for assembling genomes $(($END_TIME - $START_TIME)) seconds."; else :; fi
+echo "${shovill}${lib}_debug for more information."; fi; done; for lib in ${library[*]}; do if [[ -f ${contigfolder}${lib}.fa ]]; then if [[ $(cat \
+${contigfolder}${lib}.fa | wc -l) -eq 0 ]]; then rm ${contigfolder}${lib}.fa; echo -n "shovill did not produce contigs from $lib. see "; echo -n "${shlog}${lib}_shovill.log "
+echo "for details."; fi; fi; done; if [[ $(ls ${contigfolder} 2> /dev/null | wc -l) -eq 0 ]] ; then echo -n "assembly with shovill did not produce any contigs for downstream "
+echo "annotation. exiting"; exit 1; fi; cd ${skesa}; skes_cores=$(apptainer exec $cont bc <<<"$nprocs/$shov_par"); for lib in ${library[*]}; do max_bg_procs $shov_par
+apptainer exec $cont skesa --reads ${grouped}${lib}_R1.fq.gz,${grouped}${lib}_R2.fq.gz --cores $skes_cores --memory $shov_ram > ${lib}.skesa.fa 2>"${lib}_skesa.log" & done
+wait; for lib in ${library[*]}; do if [[ -f ${lib}.skesa.fa ]]; then if [[ $(cat ${lib}.skesa.fa | wc -l) -eq 0 ]]; then rm ${lib}.skesa.fa; echo -n "skesa did not produce "
+echo "contigs from $lib so plasmids can not be searched in the skesa assembly. see ${skesa}${lib}_skesa.log for details."; fi; else echo -n "skesa did not create "; echo \
+"${lib}.skesa.fa. check ${skesa}${lib}_skesa.log for details"; fi; done; for lib in ${library[*]}; do if [[ -f ${lib}.skesa.fa ]]; then grep -A 1 "Circ" ${lib}.skesa.fa > \
+${lib}_plas.fa; fi; if [[ $(cat ${lib}_plas.fa | wc -l) -eq 0 ]]; then rm ${lib}_plas.fa; fi; done; for lib in ${library[*]}; do if [[ -f ${lib}.plas.fa ]]; then apptainer \
+exec $cont perl -pi -e "s/^>/>${lib}-/g" ${lib}_plas.fa; fi; done; cat *_plas.fa > ${result}skesa_plasmids.fa; END_TIME=$(date +%s); echo -n "elapsed time for assembling "
+echo "genomes $(($END_TIME - $START_TIME)) seconds."; else :; fi
+
 #redefine library
 cd ${contigfolder}; files="$( ls -l|grep '^-'|awk '{if(a[$5]){ a[$5]=a[$5]"\n"$NF; b[$5]++;} else a[$5]=$NF} END{for(x in b)print a[x];}' )"; for file1 in $files
 do for file2 in $files; do if [[ "$file1" != "$file2" && -e "$file1" && -e "$file2" ]]; then if diff "$file1" "$file2" > /dev/null; then rm -v "$file2"; fi; fi; done; done
