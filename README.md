@@ -11,7 +11,7 @@ Characterization of *E. coli* and *Salmonella* genomes using High Performance Co
 
 ## quick start
 
-  *     curl -L -O https://github.com/Phylloxera/GEA-dev/releases/download/latest/geacont.tgz
+  *     curl -L -O https://github.com/Phylloxera/GEA-dev/releases/latest/download/geacont.tgz
   *     tar -xzvf geacont.tgz
   *     apptainer run-help geacont
 
