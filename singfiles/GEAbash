@@ -1,12 +1,12 @@
 #!/bin/bash
 
-###GEAbash (Gammaproteobacteria Epidemiologic Annotation) data processing bash script. v0.0.3
+###GEAbash (Gammaproteobacteria Epidemiologic Annotation) data processing bash script. v1.0.0
 
-#init vars
+#initial variables
 workdir=$(pwd); username=$(whoami); echo "GEAbash is being run by $username"; input=''; platform="MiSeq"; project="NA"; overwrite=F; ucge=T; runtime=24:00:00; hpcmem=360GB
 hpcthreads=72; hpc=F; queue=NA; account=NA; singmod=apptainer; software=$HOME/software; cont=$software/geacont; taxon=both; result=${workdir}/"results"/
-grouped=${result}"grouped"/; assembly=${result}"assembly"/; shovill=${assembly}"shovill"/; shlog=${shovill}"log"/; contigfolder=${shovill}"contigs"/; sgfa=${shovill}"gfa"/
-spades=${shovill}"spades"/; skesa=${assembly}"skesa"/; corrections=${shovill}"corrections"/; mlst=${result}"mlst"/; ecoli_mlst=${mlst}"ecoli"/
+grouped=${result}"grouped"/; assembly=${result}"assembly"/; shovill=${assembly}"shovill"/; shlog=${shovill}"log"/; contigdir_illuminas=${shovill}"contigs"/
+sgfa=${shovill}"gfa"/; spades=${shovill}"spades"/; skesa=${assembly}"skesa"/; corrections=${shovill}"corrections"/; mlst=${result}"mlst"/; ecoli_mlst=${mlst}"ecoli"/
 senterica_mlst=${mlst}"senterica"/; serotype=${result}"serotyping"/; blast_res=${result}"blast"/; fimht=${result}"fimht"/; plasmid=${result}"plasmids"/
 resist=${result}"resistance"/; refi=${resist}"resfinder"/; pofi=${resist}"pointfinder"/; pofe=${pofi}"ecoli"/; pofs=${pofi}"senterica"/; tempdir=${result}"tempdir"/
 clermont=${result}"clermont"/; virulence=${result}"virulence"/; organism1="mlst"; organism2="serotypefinder"; organism3="pointfinder"; organism4="resfinder"
@@ -14,106 +14,124 @@ organism5="plasmidfinder"; organism6="virulencefinder"; organism7="fimtyper"; or
 dbserver4="resfinder_db"; dbserver5="plasmidfinder_db"; dbserver6="virulencefinder_db"; dbserver7="fimtyper_db"; dbserver8=5loci; mdb=$HOME/share/${organism1}/${dbserver1}
 sdb=$HOME/share/${organism2}/${dbserver2}; pofdb=$HOME/share/${organism3}/${dbserver3}; rfdb=$HOME/share/${organism4}/${dbserver4}; plfdb=$HOME/share/${organism5}/${dbserver5}
 vfdb=$HOME/share/${organism6}/${dbserver6}; ftdb=$HOME/share/${organism7}/${dbserver7}; blastdb=$HOME/share/${organism8}/${dbserver8}; dbname1=SentericaEffectorAvrA_avrA
-dbname2=CytolethalDistendingToxin_cdt; dbname3=CycleInhibitingFactor_cif; dbname4=Colibactin_clb; dbname5=CytotoxicNecrotizingFactor_cnf
-nprocs=$( ls -d /sys/devices/system/cpu/cpu[[:digit:]]* | wc -w )
-#print_usage and printf appear to be c++
+dbname2=CytolethalDistendingToxin_cdt; dbname3=CycleInhibitingFactor_cif; dbname4=Colibactin_clb; dbname5=CytotoxicNecrotizingFactor_cnf; input_type=paired-fqgz
+contigdir_userFA=${result}"userFA"/; flye=${assembly}"flye"/; flog=${flye}"logs"/; finfo=${flye}"info"/; contigdir_longs=${flye}"contigs"/; groupedL=${result}"grouped_long"/
+nprocs=$( ls -d /sys/devices/system/cpu/cpu[[:digit:]]* | wc -w ); ssds=16000
+
+#user vars
 print_usage() {
   printf "Usage: ..."
 }
-while getopts ':i:t::u::o::p::j::q::r::m::c::s::a::h::' flag; do #leading colon appears necessary
+while getopts ':i:I::t::u::o::p::j::q::r::m::c::s::S:a::h::' flag; do
   case "${flag}" in
     i) input="${OPTARG}" ;;    t) taxon="${OPTARG}" ;;    u) ucge="${OPTARG}" ;;    o) overwrite="${OPTARG}" ;;    p) platform="${OPTARG}" ;;    j) project="${OPTARG}" ;;
     q) queue="${OPTARG}" ;;    r) runtime="${OPTARG}" ;;    m) hpcmem="${OPTARG}" ;;    c) hpcthreads="${OPTARG}" ;;    s) singmod="${OPTARG}" ;;    a) account="${OPTARG}" ;;
-    h) hpc="${OPTARG}" ;;
+    h) hpc="${OPTARG}" ;;    I) input_type="${OPTARG}" ;;    S) ssds="${OPTARG}" ;;
     *) print_usage
        exit 1 ;;    esac; done
-#GEAbash help message. print if no input
-if [[ -n "$input" ]]; then :; else echo -n "GEAbash(Gammaproteobacteria Epidemiologic Annotation) data processing bash script version 0.0.3 by aaron dickey aaron<dot>dickey"
-echo "<at>usda.gov"; echo "command structure: '$HOME/software/GEAbash -i <raw data input> <optional variables>'"; echo -n 'run example: $HOME/software/GEAbash -i '; echo \
-'$HOME/data/Manita/upgrade/folin2" > log 2>&1 &'; echo -n "-i input   required  can be 1-or-more input folders of illumina raw read gzipped fastq files and/or assemblies. "
-echo "Separate multiple inputs by commas."; echo -n "-t taxon   optional  default both  what is the taxon of the input, both or ecoli or senterica. By default, GEAbash "
-echo "determines taxonomy by comparing ecoli and senterica MLST profiles."; echo "-o overwrite   optional default F  should the results folder be overwritten, T or F"; echo \
-"-u  update cge databases   optional default T   should the cge databases be updated, T or F"; echo -n "high performance computer job management variables   queue is required"
-echo -n " if setting up a slurm or sun grid engine (SGE) job: -q queue  name of the queue; -r runtime  runtime in formant HH:MM:SS. e.g. 00:30:00 for a 30 minute job. default"
-echo " 24:00:00."; echo "-m memory requested  A number (in GB) for SGE jobs or a number with a unit for slurm jobs. default 360GB."; echo -n "-c cores requested  A number. "
-echo "default 72."; echo -n "-s  singularity module   optional default 'module load singularity'   what module is needed to access singularity on hpc cluster. argument must "
-echo "be quoted. if singularity is available by default, use the argument '#' to disable modules"; echo "-a account   required if job scheduler requires it for job submission"
-echo -n "a note on shovill: settings are --R1 <forward reads> --R2 <reverse reads> --trim --ram <calculated internally based on available memory>. to request different "
-echo "settings, contact the author"; echo -n "a note on mlst.py: settings are -i <contigs> -p <path to local database> -o <output directory> -s <ecoli/senterica(each assembly"
-echo " run with both to determine species)> -x -t <temporary directory> -q"; echo -n "a note on serotypefinder.py (mlst identified ecoli only): settings are -i <contigs> -p "
-echo "<path to local database> -o <output directory> -t 0.95 -l 0.80 -x -q"; echo -n "a note on SeqSero2_package.py (mlst identified senterica only): settings are -m k -t 4 "
-echo "-i <contigs> -d <output directory>"; echo -n "a note on resfinder: settings are -ifa <contigs> -acq -c -db_res <path to local resfinder_db database> -db_point <path to "
-echo "local pointfinder_db database> -t 0.9 -l 0.8 -s <species identified by mlst: either salmonella or escherichi> -o <output directory>"; echo -n "a note on "
-echo "plasmidfinder.py: settings are -i <contigs> -p <path to local database> -o <output directory> -mp <path to blastn> -t 0.9 -l 0.8 -x -q"; echo -n "a note on skesa: "
-echo "settings are --reads <forward reads,reverse reads> --cores <calculated internally based on available cores> --memory <calculated internally based on available memory>"
-echo -n "a note on virulencefinder.py (mlst identified ecoli only): settings are -i <contigs> -p <path to local database> -o <output directory> -d virulence_ecoli -mp <path t"
-echo "o blastn> -t 0.95 -l 0.80 -x -q"; echo "a note on ezclermont: default settings are used"; echo -n "a note on fimtyper.pl: settings are -i <contigs> -o <output directory"
-echo "> -d <path to local database> -k '95.0' -l 0.8"; echo -n "All local databases are created if not present using git clone from https://bitbucket.org/genomicepidemiology, "
-echo "e.g., https://bitbucket.org/genomicepidemiology/fimtyper_db.git."; exit 0; fi
 
-#taxon valid check. moved from line 189 on 5/6/24
-if [[ "$taxon" == "both" || "$taxon" == "ecoli" || "$taxon" == "senterica" ]]; then :; else echo "taxon is not set correctly, exiting"; exit 1; fi
+#GEAbash help message
+if [[ -n "$input" ]]; then :; else echo -n "GEAbash(GEA pipeline for characterizing E coli and Salmonella genomes) data processing bash script version 1.0.0 by aaron dickey "
+echo "aaron<dot>dickey<at>usda.gov"; echo "command structure: '$HOME/software/GEAbash -i <raw data input> <optional variables>'"; echo -n "run example: "; echo \
+'$HOME/software/GEAbash -i $HOME/data/indir2" > log 2>&1 &'; echo -n "-i input   required  can be 1-or-more folders of the same input data type. Separate multiple inputs by "
+echo "commas."; echo -n "-I input type   optional  default paired-fqgz  8 available options: 1. paired-fqgz (illumina raw reads in gzipped fastq format), 2. contigs (fasta "
+echo -n "format. will not be assembled), 3-8. nano-raw, nano-corr, nano-hq, pacbio-raw, pacbio-corr, pacbio-hifi (unassembled long read sequencing in FASTA or FASTQ format, "
+echo "uncompressed or compressed with gz)"; echo -n "-S size select down sample (ssds) parameter for long reads  optional  default 16000  use the longest <ssds> reads for "
+echo "assembly"; echo -n "-t taxon   optional  default both  what is the taxon of the input, both or ecoli or senterica. By default, GEAbash determines taxonomy by comparing "
+echo "ecoli and senterica MLST profiles."; echo "-o overwrite   optional default F  should the results folder be overwritten, T or F"; echo -n "-u  update cge databases   "
+echo "optional default T   should the cge databases be updated, T or F"; echo -n "high performance computer job management variables   queue is required if setting up a slurm"
+echo -n " or sun grid engine (SGE) job: -q queue  name of the queue; -r runtime  runtime in formant HH:MM:SS. e.g. 00:30:00 for a 30 minute job. default 24:00:00; -m memory "
+echo -n "requested  A number (in GB) for SGE jobs or a number with a unit for slurm jobs. default 360GB; -c cores requested  A number. default 72; -s  singularity module   "
+echo -n "optional default 'module load singularity'   what module is needed to access singularity on hpc cluster. argument must be quoted. if singularity is available by "
+echo "default, use the argument '#' to disable modules; -a account   required if job scheduler requires it for job submission"; echo -n "a note on shovill: settings are --R1 "
+echo "<forward reads> --R2 <reverse reads> --trim --ram <calculated internally based on available memory>. to request different settings, contact the author"; echo -n "a note"
+echo -n " on skesa: settings are --reads <forward reads,reverse reads> --cores <calculated internally based on available cores> --memory <calculated internally based "; echo \
+"on available memory>. Skesa is only run if input type is paired-fqgz."; echo -n "a note on flye: memory and cores used are calculated internally based on available resources"
+echo -n ". assemblies are non-deterministic so results are non-reproducible. For information about the 6 input types, see:"; echo \
+"https://github.com/mikolmogorov/Flye/blob/flye/docs/USAGE.md#quickusage"; echo -n "a note on mlst.py: settings are -i <contigs> -p <path to local database> -o <output "
+echo "directory> -s <ecoli/senterica(each assembly run with both to determine species)> -x -t <temporary directory> -q"; echo -n "a note on serotypefinder.py (ecoli only): "
+echo "settings are -i <contigs> -p <path to local database> -o <output directory> -t 0.95 -l 0.80 -x -q"; echo -n "a note on SeqSero2_package.py (senterica only): settings "
+echo "are -m k -t 4 -i <contigs> -d <output directory>"; echo -n "a note on resfinder: settings are -ifa <contigs> -acq -c -db_res <path to local resfinder_db database> "
+echo "-db_point <path to local pointfinder_db database> -t 0.9 -l 0.8 -s <taxon> -o <output directory>"; echo -n "a note on plasmidfinder.py: settings are -i <contigs> -p "
+echo "<path to local database> -o <output directory> -mp <path to blastn> -t 0.9 -l 0.8 -x -q"; echo -n "a note on virulencefinder.py (ecoli only): settings are -i <contigs> "
+echo "-p <path to local database> -o <output directory> -d virulence_ecoli -mp <path to blastn> -t 0.95 -l 0.80 -x -q"; echo "a note on ezclermont: default settings are used"
+echo "a note on fimtyper.pl: settings are -i <contigs> -o <output directory> -d <path to local database> -k '95.0' -l 0.8"; echo -n "All local databases are downloaded if not"
+echo " present"; exit 0; fi
+
+if [[ "$taxon" == "both" || "$taxon" == "ecoli" || "$taxon" == "senterica" ]]; then :; else echo "taxon is not set correctly, exiting"; exit 1; fi #taxon valid check
 
 #setting up hpc/normal accounts for different singularity modules or no modules. -h internally detected.
-while [ $hpc == F ]; do if [ ! $queue == "NA" ]; then if [ -n "$(sinfo 2>/dev/null)" ]; then submsys=slurm; elif [ -n "$(qhost 2>/dev/null)" ]; then submsys=sge; else echo \
-"queue specified but hpc system uncertain. exiting"; exit 1; fi; if [[ " ${submsys} " = " sge " ]]; then if [ -f sge.sh ]; then rm GEAbash.* >/dev/null 2>&1; sleep 60; fi
-apptainer exec $cont cp /usr/local/src/sge.sh .; elif [[ " ${submsys} " = " slurm " ]]; then if [ -f slurm.sh ]; then rm slurm*.out >/dev/null 2>&1; sleep 60; fi
-apptainer exec $cont cp /usr/local/src/slurm.sh .; else echo "system uncertain. exiting"; exit 1; fi; if [[ " ${queue} " = " NA " ]]; then echo -n "queue not specified. "
-echo "exiting"; exit 1; fi; if [[ " ${submsys} " = " sge " ]]; then echo -n "preparing to run GEAbash in hpc cluster mode. GEAbash log outputs will be in the hpc submission "
-echo "system log files for sge. e.g., GEAbash.e* & GEAbash.o*"; sed -i "s/name/GEAbash/g" sge.sh; sed -i "s/queue/$queue/g" sge.sh; sed -i "s/runtime/$runtime/g" sge.sh; sed \
--i "s/RAM/$hpcmem/g" sge.sh; sed -i "s/hpctasks/$hpcthreads/g" sge.sh; sed -i \
-'s%command%$software/GEAbash -i "${input}" -o "${overwrite}" -u "${ucge}" -p "${platform}" -j "${project}" -t "${taxon}" -c "${hpcthreads}" -h T%g' sge.sh; sed -i \
-"s%vars%software='$software'; input='$input'; overwrite='$overwrite'; ucge='$ucge'; platform='$platform'; project='$project'; taxon='$taxon'; hpcthreads='$hpcthreads'%g" \
-sge.sh; sed -i "s/modules/$singmod/g" sge.sh; if [ $account == "NA" ]; then other='##'; sed -i "s/account/$other/g" sge.sh; sed -i "s/-P #/###/g" sge.sh; else sed -i \
-"s/account/$account/g" sge.sh; fi; qsub sge.sh; exit 0; else echo -n "preparing to run GEAbash in hpc cluster mode. GEAbash log outputs will be in the hpc submission system "
-echo "log files for slurm. e.g., slurm-*.out"; sed -i "s/name/GEAbash/g" slurm.sh; sed -i "s/queue/$queue/g" slurm.sh; sed -i "s/runtime/$runtime/g" slurm.sh; sed -i \
-"s/RAM/$hpcmem/g" slurm.sh; sed -i "s/hpctasks/$hpcthreads/g" slurm.sh; sed -i 's/other/$other/g' slurm.sh; sed -i \
-'s%command%$software/GEAbash -i "${input}" -o "${overwrite}" -u "${ucge}" -p "${platform}" -j "${project}" -t "${taxon}" -c "${hpcthreads}" -h T%g' slurm.sh; sed -i \
-"s%vars%software='$software'; input='$input'; overwrite='$overwrite'; ucge='$ucge'; platform='$platform'; project='$project'; taxon='$taxon'; hpcthreads='$hpcthreads'%g" \
-slurm.sh; sed -i "s/modules/module load $singmod/g" slurm.sh; if [ $account == "NA" ]; then other='##'; sed -i "s/account/$other/g" slurm.sh; sed -i "s/-A #/###/g" slurm.sh
-else sed -i "s/account/$account/g" slurm.sh; fi; sbatch slurm.sh; exit 0; fi; fi; if [ $queue == "NA" ]; then echo "running GEAbash in regular mode"
-if [ -n "$(sinfo 2>/dev/null)" ]; then echo "queue not specified for running in hpc mode. exiting"; exit 1; elif [ -n "$(qhost 2>/dev/null)" ]; then echo -n "queue not "
-echo "specified for running in hpc mode. exiting"; exit 1; fi; fi; hpc=T; done
+while [ $hpc == F ]; do if [ ! $queue == "NA" ]; then if [ -n "$(sinfo 2>/dev/null)" ]; then submsys=slurm; elif [ -n "$(qhost 2>/dev/null)" ]; then submsys=sge; else echo -n "queue specified but hpc system "
+echo "uncertain. exiting"; exit 1; fi; if [[ " ${submsys} " = " sge " ]]; then if [ -f sge.sh ]; then rm GEAbash.* >/dev/null 2>&1; sleep 60; fi; apptainer exec $cont cp /usr/local/src/sge.sh .
+elif [[ " ${submsys} " = " slurm " ]]; then if [ -f slurm.sh ]; then rm slurm*.out >/dev/null 2>&1; sleep 60; fi; apptainer exec $cont cp /usr/local/src/slurm.sh .; else echo "system uncertain. exiting"; exit 1
+fi; if [[ " ${queue} " = " NA " ]]; then echo "queue not specified. exiting"; exit 1; fi; if [[ " ${submsys} " = " sge " ]]; then echo -n "preparing to run GEAbash in hpc cluster mode. GEAbash log outputs will "
+echo "be in the hpc submission system log files for sge. e.g., GEAbash.e* & GEAbash.o*"; sed -i "s/name/GEAbash/g" sge.sh; sed -i "s/queue/$queue/g" sge.sh; sed -i "s/runtime/$runtime/g" sge.sh; sed -i \
+"s/RAM/$hpcmem/g" sge.sh; sed -i "s/hpctasks/$hpcthreads/g" sge.sh; sed -i \
+'s%command%$software/GEAbash -i "${input}" -I "${input_type}" -o "${overwrite}" -u "${ucge}" -S "${ssds}" -p "${platform}" -j "${project}" -t "${taxon}" -c "${hpcthreads}" -h T%g' sge.sh; sed -i \
+"s%vars%software='$software'; input='$input'; input_type='$input_type'; overwrite='$overwrite'; ucge='$ucge'; ssds='$ssds'; platform='$platform'; project='$project'; taxon='$taxon'; hpcthreads='$hpcthreads'%g" \
+sge.sh; sed -i "s/modules/$singmod/g" sge.sh; if [ $account == "NA" ]; then other='##'; sed -i "s/account/$other/g" sge.sh; sed -i "s/-P #/###/g" sge.sh; else sed -i "s/account/$account/g" sge.sh; fi; qsub \
+sge.sh; exit 0; else echo "preparing to run GEAbash in hpc cluster mode. GEAbash log outputs will be in the hpc submission system log files for slurm. e.g., slurm-*.out"; sed -i "s/name/GEAbash/g" slurm.sh
+sed -i "s/queue/$queue/g" slurm.sh; sed -i "s/runtime/$runtime/g" slurm.sh; sed -i "s/RAM/$hpcmem/g" slurm.sh; sed -i "s/hpctasks/$hpcthreads/g" slurm.sh; sed -i 's/other/$other/g' slurm.sh; sed -i \
+'s%command%$software/GEAbash -i "${input}" -I "${input_type}" -o "${overwrite}" -u "${ucge}" -S "${ssds}" -p "${platform}" -j "${project}" -t "${taxon}" -c "${hpcthreads}" -h T%g' slurm.sh; sed -i \
+"s%vars%software='$software'; input='$input'; input_type='$input_type'; overwrite='$overwrite'; ucge='$ucge'; ssds='$ssds'; platform='$platform'; project='$project'; taxon='$taxon'; hpcthreads='$hpcthreads'%g" \
+slurm.sh; sed -i "s/modules/module load $singmod/g" slurm.sh; if [ $account == "NA" ]; then other='##'; sed -i "s/account/$other/g" slurm.sh; sed -i "s/-A #/###/g" slurm.sh; else sed -i "s/account/$account/g" \
+slurm.sh; fi; sbatch slurm.sh; exit 0; fi; fi; if [ $queue == "NA" ]; then echo "running GEAbash in regular mode"; if [ -n "$(sinfo 2>/dev/null)" ]; then echo -n "queue not specified for running in hpc mode. "
+echo "exiting"; exit 1; elif [ -n "$(qhost 2>/dev/null)" ]; then echo "queue not specified for running in hpc mode. exiting"; exit 1; fi; fi; hpc=T; done
 
-#process user inputs#folders processed first so can have numbers only.
-START_TIME=$(date +%s); echo "processing user inputs"; if [ -d $result ]; then if [ $overwrite == F ]; then echo -n "results present and overwrite=F. to overwrite, re-run "
-echo "command with the option -o T. exiting"; exit 1; else echo "overwriting results"; rm -r $result; mkdir $result $grouped $assembly $shovill $contigfolder $skesa $mlst \
-$ecoli_mlst $senterica_mlst $serotype $plasmid $resist $pofi $refi $tempdir $spades $corrections $shlog $sgfa $blast_res; fi; else mkdir $result $grouped $assembly $shovill \
-$skesa $contigfolder $mlst $ecoli_mlst $senterica_mlst $serotype $plasmid $resist $pofi $refi $tempdir $spades $corrections $shlog $sgfa $blast_res; fi
-#data on marc core lab storage
-if [ $platform == 'NextSeq' ]; then parentdir="/mnt/NextSeq/NextSeq_Output/"; elif [ $platform == 'MiSeq' ]; then parentdir="/mnt/MiSeq/Analysis/"
-elif [ $platform == 'NextSeq2k' ]; then parentdir="/mnt/NextSeq/NextSeq_2K_Output/"; else echo "You have not set your platform correctly"; fi; if [ $platform == 'NextSeq2k' ]
+#processing user inputs. 
+START_TIME=$(date +%s); echo "processing user inputs"; IFS=',' read -r -a input_type <<< "$input_type"; IFS=',' read -r -a input <<< "$input"
+if [ "${#input[@]}" -gt "${#input_type[@]}" ]; then if [ "${#input_type[@]}" -eq 1 ]; then for (( i=1;  i < ${#input[@]};  i++ )); do input_type+=("${input_type[0]}"); done
+else echo "there must be either a single input type or a 1-to-1 ratio of inputs and input types. exiting"; exit 1; fi; elif [ "${#input[@]}" -eq "${#input_type[@]}" ]; then :
+else echo "there must be either a single input type or a 1-to-1 ratio of inputs and input types. exiting"; exit 1; fi; for (( i=0;  i < ${#input_type[@]};  i++ ))
+#https://unix.stackexchange.com/questions/111508/bash-test-if-word-is-in-set. case esac also popular
+do if [[ "${input_type[$i]}" =~ ^(rundate|paired-fqgz|contigs|nano-raw|nano-corr|nano-hq|pacbio-raw|pacbio-corr|pacbio-hifi)$ ]]; then :; else echo -n "input_type is not set "
+echo "correctly, exiting"; exit 1; fi; done; if [ -d $result ]; then if [ $overwrite == F ]; then echo -n "results present and overwrite=F. to overwrite, re-run command with "
+echo "the option -o T. exiting"; exit 1; else echo "overwriting results"; rm -r $result; mkdir $result $mlst $ecoli_mlst $senterica_mlst $serotype $plasmid $resist $pofi \
+$refi $tempdir $blast_res; fi; else mkdir $result $mlst $ecoli_mlst $senterica_mlst $serotype $plasmid $resist $pofi $refi $tempdir $blast_res; fi #v in "${!long@}" references variable names either beginning 
+#with or containing 'long'. also rundate. data on marc core lab storage rewritten slightly 6/29/24 to enforce user specified input_type=rundate. the rundates variable should be replaced by the rundates2 variable
+rundates=(); userilluminas=(); userFAs=(); longs=(); flye_types=(); for (( i=0;  i < ${#input_type[@]};  i++ )); do if [[ "${input_type[$i]}" == "rundate" ]] #cont. testing will not be a priority.
+then rundates+=("${input[$i]}"); elif [[ "${input_type[$i]}" == "paired-fqgz" ]]; then userilluminas+=("${input[$i]}"); elif  [[ "${input_type[$i]}" == "contigs" ]]
+then userFAs+=("${input[$i]}"); else longs+=("${input[$i]}"); flye_types+=("${input_type[$i]}"); fi; done; if [ "${#rundates[@]}" -gt 0 ]; then mkdir $grouped $assembly \
+$shovill $contigdir_illuminas $spades $corrections $shlog $sgfa $skesa; fi; if [ "${#userilluminas[@]}" -gt 0 ]; then mkdir $grouped $assembly $shovill $contigdir_illuminas \
+$spades $corrections $shlog $sgfa $skesa 2>/dev/null; fi; if [ "${#userFAs[@]}" -gt 0 ]; then mkdir $contigdir_userFA; fi; if [ "${#longs[@]}" -gt 0 ]; then mkdir $assembly \
+$flye $flog $finfo $contigdir_longs $groupedL 2>/dev/null; fi; for (( i=0;  i < ${#rundates[@]};  i++ )); do if [ $platform == 'NextSeq' ]
+then parentdir="/mnt/NextSeq/NextSeq_Output/"; elif [ $platform == 'MiSeq' ]; then parentdir="/mnt/MiSeq/Analysis/"; elif [ $platform == 'NextSeq2k' ]
+then parentdir="/mnt/NextSeq/NextSeq_2K_Output/"; else echo "You have not set your platform correctly"; fi; if [ $platform == 'NextSeq2k' ]
 then subdir="/Analysis/1/Data/fastq/"; else subdir="/Data/Intensities/BaseCalls/"; fi; unset insets; declare -A insets; NOR=$(echo $input | grep -o ',' | wc -l)
 NOR=$((NOR+1)); for (( j=1; j <= NOR; j++ )); do insets[$(paste <(echo "in") <(echo $j) --delimiters '')]=$(paste <(echo $input | tr "," "\t" | cut -f$j) --delimiters '')
-done; unset folders; folders=(); unset rundates; rundates=(); unset leftovers; leftovers=(); re='^[0-9]+$'; for i in "${insets[@]}"; do tv=$(eval echo "${i}")
-if [[ -d "${tv}" ]]; then folders+=("${tv}"); elif [[ "${tv}" =~ $re ]]; then rundates+=("${tv}"); else leftovers+=("${tv}"); fi; done
-#process leftovers
-if [ "${#leftovers}" -gt 0 ]; then for (( i=0;  i < ${#leftovers[@]};  i++ )); do eval "rundate_alt$i"=${leftovers[i]}; done; unset rdcheck; declare -A rdcheck=( )
-for v in "${!rundate_alt@}"; do rdcheck[${v}]="${parentdir}${!v}"*"${subdir}"; done; for v in "${!rdcheck[@]}"; do if [ $project == 'NA' ]; then x=$(eval echo \
-${rdcheck[$v]}); else x=$(eval echo ${rdcheck[$v]})"${project}"; fi; y="$v"; z=$(ls "${x}"/*f*q.gz 2> /dev/null | wc -l); if [ $z -lt 1 ]; then echo -n "could not find "
-echo "input folder(s) ${leftovers[i]} or ${x}. exiting"; exit 1; else ln -s "${x}" "${result}$y"; fi; done; fi
-#process rundates
-if [ "${#rundates}" -gt 0 ]; then for (( i=0;  i < ${#rundates[@]};  i++ )); do eval "rundate_num$i"=${rundates[i]}; done; unset rd; declare -A rd=( )
+done; unset rundates2; rundates2=(); unset leftovers; leftovers=(); re='^[0-9]+$'; for i in "${insets[@]}"; do tv=$(eval echo "${i}"); if [[ "${tv}" =~ $re ]]
+then rundates2+=("${tv}"); else leftovers+=("${tv}"); fi; done; if [ "${#leftovers}" -gt 0 ]; then for (( i=0;  i < ${#leftovers[@]};  i++ )); do eval \
+"rundate_alt$i"=${leftovers[i]}; done; unset rdcheck; declare -A rdcheck=( ); for v in "${!rundate_alt@}"; do rdcheck[${v}]="${parentdir}${!v}"*"${subdir}"; done
+for v in "${!rdcheck[@]}"; do if [ $project == 'NA' ]; then x=$(eval echo ${rdcheck[$v]}); else x=$(eval echo ${rdcheck[$v]})"${project}"; fi; y="$v"; z=$(ls "${x}"/*f*q.gz \
+2> /dev/null | wc -l); if [ $z -lt 1 ]; then echo -n "could not find input folder(s)"; echo " ${leftovers[i]} or ${x}. exiting"; exit 1; else ln -s "${x}" "${result}$y"; fi
+done; fi; if [ "${#rundates2}" -gt 0 ]; then for (( i=0;  i < ${#rundates2[@]};  i++ )); do eval "rundate_num$i"=${rundates2[i]}; done; unset rd; declare -A rd=( )
 for v in "${!rundate_num@}"; do rd[${v}]="${parentdir}${!v}"*"${subdir}"; done; for v in "${!rd[@]}"; do if [ $project == 'NA' ]; then x=$(eval echo ${rd[$v]})
-else x=$(eval echo ${rd[$v]})"${project}"; fi; y="$v"; z=$(ls "${x}"/*f*q.gz 2> /dev/null | wc -l); if [ $z -lt 1 ]; then echo -n "$x either has no gzipped fastqs or"
-echo -n " does not exist. check that your inputs contain gzipped fastq files. to qc check rundates, try constructing a command with the format: ls $parentdir<rundate><tab>, "
-echo -n "e.g. type ls $parentdir/210422 and then press the tab key 2 times. If no results show up, there is no raw data for that platform and rundate. If 2 results show up, "
-echo -n "you need to rerun gea with additional characters appended to the end of your run date to distinguish among alternatives, e.g. $HOME/software/GEAbash -i 171213_NS5002"
-echo " -t cow -p NextSeq -j GPE7_WGS. questions can be sent to the author of GEAbash. exiting"; exit 1; else ln -s "${x}" "${result}$y"; fi; done; fi
-#process folders last
-if [ "${#folders}" -gt 0 ]; then for (( i=0;  i < ${#folders[@]};  i++ )); do eval "folder$i"='"${folders[i]}"'; done; unset folders; unset foldercount; unset fol; declare \
--A fol=( ); for v in "${!folder@}"; do fol[${v}]="${!v}"; done; for v in "${!fol[@]}"; do x=$(eval echo ${fol[$v]}); cd "$x"; x=$(pwd); cd $workdir; y="$v"; z=$(ls \
-"${x}"/*.f*q.gz 2> /dev/null | wc -l); fa_input=$(ls "${x}"/*.f*a 2> /dev/null | wc -l); fasta_input=$(ls "${x}"/*.fasta 2> /dev/null | wc -l); fna_input=$(ls \
-"${x}"/*.fna 2> /dev/null | wc -l); if [ $z -lt 1 ]; then if [ $fa_input -lt 1 ]; then echo "input folders don't contain f*q.gz or f*a file extensions. exiting"; exit 0
-else cp "${x}"/*.f*a $contigfolder; fi; if [ $fasta_input -gt 0 ]; then cd $contigfolder; for file in *.fasta; do mv -- "$file" "${file%.fasta}.fa"; done; fi; 
-if [ $fna_input -gt 0 ]; then cd $contigfolder; for file in *.fna; do mv -- "$file" "${file%.fasta}.fa"; done; fi; else ln -s "${x}" "${result}$y"; fi; done; fi
-#allin for determining assembly
-allin=($(ls -lR $result | grep ^l | grep -E -o '(rundate|folder).{0,300}' | cut -d ' ' -f1))
-#fail safe for any empty input contigs
-r=($(ls ${contigfolder}*.fa 2>/dev/null)); b=(${r[*]##*/}); tmp=(${b[*]%.*}); clibrary=($(printf "%s\n" "${tmp[@]}" | sort -u)); for clib in ${clibrary[*]}
-do if [[ -f ${contigfolder}${clib}.fa ]]; then if [[ $(cat ${contigfolder}${clib}.fa | wc -l) -eq 0 ]]; then rm ${contigfolder}${clib}.fa; echo \
-"there are no contigs in $clib. removing."; fi; fi; done
-#database checks that are not species specific.
+else x=$(eval echo ${rd[$v]})"${project}"; fi; y="$v"; z=$(ls "${x}"/*f*q.gz 2> /dev/null | wc -l); if [ $z -lt 1 ]; then echo -n "$x either has no gzipped fastqs or does not"
+echo -n " exist. check that your inputs contain gzipped fastq files. to qc check rundates, try constructing a command with the format: ls $parentdir<rundate><tab>, e.g. type "
+echo -n "ls $parentdir/210422 and then press the tab key 2 times. If no results show up, there is no raw data for that platform and rundate. If 2 results show up, you need to"
+echo -n " rerun gea with additional characters appended to the end of your run date to distinguish among alternatives, e.g. $HOME/software/GEAbash -i 171213_NS5002 -t ecoli "
+echo "-p NextSeq -j GPE7_WGS. questions can be sent to the author of GEAbash. exiting"; exit 1; else ln -s "${x}" "${result}$y"; fi; done; fi; done
+if [ "${#userilluminas}" -gt 0 ]; then for (( i=0;  i < ${#userilluminas[@]};  i++ )); do eval "userillumina$i"='"${userilluminas[i]}"'; done; unset userilluminas; unset ill
+declare -A ill=( ); for v in "${!userillumina@}"; do ill[${v}]="${!v}"; done; for v in "${!ill[@]}"; do unset x; unset y; x=$(eval echo ${ill[$v]}); cd "$x"; x=$(pwd); cd \
+$workdir; y="$v"; ln -s "${x}" "${result}$y"; done; fi; if [ "${#userFAs}" -gt 0 ]; then for (( i=0;  i < ${#userFAs[@]};  i++ )); do eval "userFA$i"='"${userFAs[i]}"'; done
+unset userFAs; unset uFA; declare -A uFA=( ); for v in "${!userFA@}"; do uFA[${v}]="${!v}"; done; for v in "${!uFA[@]}"; do unset x; unset y; x=$(eval echo ${uFA[$v]}); cd \
+"$x"; x=$(pwd); cd $workdir; y="$v"; ln -s "${x}" "${result}$y"; done; fi; if [ "${#longs}" -gt 0 ]; then for (( i=0;  i < ${#longs[@]};  i++ )); do eval \
+"long$i"='"${longs[i]}"'; done; unset longs; unset lon; declare -A lon=( ); for v in "${!long@}"; do lon[${v}]="${!v}"; done; for v in "${!lon[@]}"; do unset x; unset y
+x=$(eval echo ${lon[$v]}); cd "$x"; files=($(find . -maxdepth 1 -type f |cut -d '/' -f2)); for (( j=0;  j < ${#files[@]};  j++ )); do file="${files[j]}"
+if [ -n "$(file -ib $file | grep gzip)" ]; then compressed=T; else compressed=F; fi; if [[ "$compressed" == "T" ]]; then isfagz=$(zcat ${file} |head -n 1 |cut -c1-1 |grep \
+'>' |wc -l); isfqgz=$(zcat ${file} |head -n 1 |cut -c1-1 |grep '@' |wc -l); isfa=0; isfq=0; elif [[ "$compressed" == "F" ]]; then isfa=$(head -n 1 ${file} |cut -c1-1 |grep \
+'>' |wc -l); isfq=$(head -n 1 ${file} |cut -c1-1 |grep '@' |wc -l); isfagz=0; isfqgz=0; else echo "an unexpected error occurred during user input evaluation. exiting"; exit 1
+fi; if [ $isfa -eq 1 ]; then :; elif [ $isfagz -eq 1 ]; then :; elif [ $isfq -eq 1 ]; then :; elif [ $isfqgz -eq 1 ]; then :; else echo -n "$file in $x is not in approved "
+echo "format for input to flye. exiting"; exit 1; fi; done; x=$(pwd); cd $workdir; y="$v"; ln -s "${x}" "${result}$y"; done; fi; lnin_illumina=($(ls -lR $result | grep \
+^l | grep -E -o '(rundate|userillumina).{0,300}' | cut -d ' ' -f1)); lnin_long=($(ls -lR $result |grep ^l |grep -E -o '(long).{0,300}' |cut -d ' ' -f1)); lnin_uFA=($(ls -lR \
+$result |grep ^l |grep -E -o '(userFA).{0,300}' |cut -d ' ' -f1)); unset x; cd $result; for (( i=0;  i < ${#lnin_uFA[@]};  i++ )); do x="${lnin_uFA[i]}"; cd $x; unset files
+files=($(find . -maxdepth 1 -type f |cut -d '/' -f2)); for (( j=0;  j < ${#files[@]};  j++ )); do file="${files[j]}"; isfa=$(head -n 1 ${file} |cut -c1-1 |grep '>' |wc -l)
+if [ $isfa -eq 1 ]; then xfree=${file[*]%.*}; newfile=${contigdir_userFA}${xfree}.fa; cp $file $newfile; fi; done; cd $result; rm $x; done; if [ -d "$contigdir_userFA" ]
+then cd $contigdir_userFA #below updated dedup with -lt 2 catch. must take place inside directory. this is the first dedup for userFA is after placing on $contigdir_userFA across all userFA inputs.
+unset files; files=($(find . -maxdepth 1 -type f |cut -d '/' -f2)); if [ "${#files}" -lt 2 ]; then :; else unset files; files="$( ls -l|grep '^-'|awk \
+'{if(a[$5]){ a[$5]=a[$5]"\n"$NF; b[$5]++;} else a[$5]=$NF} END{for(x in b)print a[x];}' )"; for file1 in $files; do for file2 in $files
+do if [[ "$file1" != "$file2" && -e "$file1" && -e "$file2" ]]; then if diff "$file1" "$file2" > /dev/null; then rm -v "$file2"; fi; fi; done; done; fi; r=($(ls \
+${contigdir_userFA}*.fa 2>/dev/null)); b=(${r[*]##*/}); tmp=(${b[*]%.*}); clibrary=($(printf "%s\n" "${tmp[@]}" | sort -u)); fi #below non species specific db checks
 cd $HOME; if [ -d "share" ]; then :; else mkdir share; fi; cd share; if [ -d "$organism3" ]; then cd $organism3; else mkdir $organism3; cd $organism3; fi
 if [[ -d "$dbserver3" && $(ls ${dbserver3} | wc -l) -eq 0 ]]; then rm -rf ${dbserver3}; fi; if [ $(ls ${dbserver3} 2>/dev/null | wc -l) -gt 0 ]; then :; if [[ "$ucge" = T ]]
 then rm -rf ${pofdb}; apptainer exec $cont git clone https://bitbucket.org/genomicepidemiology/pointfinder_db.git; else :; fi; else apptainer exec $cont git clone \
@@ -128,110 +146,185 @@ exec $cont git clone https://bitbucket.org/genomicepidemiology/plasmidfinder_db.
 $HOME/share; if [ -d "$organism8" ]; then cd $organism8; else mkdir $organism8; cd $organism8; fi; if [[ -d "$dbserver8" && $(ls ${dbserver8} | wc -l) -eq 0 ]]; then rm -rf \
 ${dbserver8}; fi; if [ $(ls ${dbserver8} 2>/dev/null | wc -l) -gt 0 ]; then :; if [[ "$ucge" = T ]]; then rm -rf ${blastdb}; apptainer exec $cont git clone \
 https://github.com/Phylloxera/5loci.git; else :; fi; else apptainer exec $cont git clone https://github.com/Phylloxera/5loci.git; ud=$(date +%Y/%m/%d); echo -n "blast "
-echo "database created by $username on $ud"; fi
-#calc vars; redefine nprocs, etc. to account for slurm / sge / single computer.
+echo "database created by $username on $ud"; fi #below calc vars; redefine nprocs, etc. to account for slurm / sge / single computer. l164 the max_bg_procs function for paralellizing certain tasks.
 if [ -n "$(sinfo 2>/dev/null)" ]; then nprocs=$hpcthreads; fi; if [ -n "$(qhost 2>/dev/null)" ]; then nprocs=$hpcthreads; fi; util_float=$(top -d 0.5 -b -n2 | grep \
 "Cpu(s)" | tail -n 1 | awk '{print $2}'); util=$(echo $util_float | apptainer exec $cont awk '{print int($1+0.5)}'); if [ "${util}" -gt 0 ]; then nprocs=$((nprocs - util)); fi
-echo "nprocs:$nprocs"; maxram=$(apptainer exec $cont bc <<<"$(awk '/MemTotal/{print $2}' /proc/meminfo)/1000000"); shov_par=$(apptainer exec $cont bc <<<"$nprocs/3")
-shov_ram=$(apptainer exec $cont bc <<<"$maxram/$shov_par"); cgeprocs=$(apptainer exec $cont bc <<<"$nprocs/2")
-#the max_bg_procs function for paralellizing certain tasks. attempting again sept 2022 with cge programs.
+echo "GEAbash is using $nprocs cores"; if [ $nprocs -lt 1 ]; then echo -n "GEAbash is unable to proceed since available cores = $nprocs. please run GEAbash on a different "
+echo "resource or at a later time. exiting."; exit 1; fi; maxram=$(apptainer exec $cont bc <<<"$(awk '/MemTotal/{print $2}' /proc/meminfo)/1000000"); shov_par=$(apptainer \
+exec $cont bc <<<"$nprocs/3"); shov_ram=$(apptainer exec $cont bc <<<"$maxram/$shov_par"); cgeprocs=$(apptainer exec $cont bc <<<"$nprocs/2"); skes_cores=$(apptainer exec \
+$cont bc <<<"$nprocs/$shov_par")
 function max_bg_procs {
 if [[ $# -eq 0 ]] ; then echo -n "Usage: max_bg_procs NUM_PROCS.  Will wait until the number of background (&) bash processes (as determined by 'jobs -pr') falls below "
 echo "NUM_PROCS"; return; fi; local max_number=$((0 + ${1:-0})); while true; do local current_number=$(jobs -pr | wc -l); if [[ $current_number -lt $max_number ]]
 then break; fi; sleep 1; done
 }
 END_TIME=$(date +%s); echo "elapsed time for processing user input $(($END_TIME - $START_TIME)) seconds"
-#group raw data. updated for fq diversity. only for paired end. has duplicate checking
-if [[ -n "$allin" ]]; then START_TIME=$(date +%s); echo "grouping raw data for each library across lanes/rundates/folders"; cd $result; for (( i=0;  i < ${#allin[@]};  i++ ))
-do x="${allin[i]}"; unset r; unset b; unset tmp; unset library; r=($(ls ${x}/*f*q.gz)); b=(${r[*]##*/}); tmp=(${b[*]%%_*}); library=($(printf "%s\n" "${tmp[@]}" | sort -u))
-und="Undetermined"; for (( j=0; j<${#library[@]}; j++ )); do if [[ ${library[j]} == $und ]]; then library=( "${library[@]:0:$j}" "${library[@]:$((j + 1))}" ); j=$((j - 1)); fi
-done; cd $x
 
-lcountB=${#library[@]}
-
-for lib in ${library[*]}; do max_bg_procs $nprocs; cat ${lib}*_R1*.f*q.gz > ${grouped}/${lib}_"tmp$i"_R1.fq.gz && cat ${lib}*_R2*.f*q.gz > \
-${grouped}/${lib}_"tmp$i"_R2.fq.gz & done; wait; for lib in ${library[*]}; do if [ $(ls ${grouped}/${lib}_"tmp$i"_*.fq.gz | wc -l) -eq 2 ]; then :; else echo -n "raw data "
-echo "grouping halted due to error. report this error to the program developer. exiting"; exit 1; fi; done; cd $result; done; if ls rundate* 1> /dev/null 2>&1; then rm \
-$result/rundate*; fi; if ls folder* 1> /dev/null 2>&1; then rm $result/folder*; fi; unset r; unset b; unset tmp; unset library; r=($(ls ${grouped}*.fq.gz)); b=(${r[*]##*/})
-tmp=(${b[*]%%_*}); library=($(printf "%s\n" "${tmp[@]}" | sort -u))
-
-lcountA=${#library[@]}
-
-cd ${grouped}; files="$( ls -l|grep '^-'|awk \
+#updated illumina group and assemble; setup
+if [ "${#lnin_illumina}" -gt 0 ]; then START_TIME=$(date +%s); echo "grouping raw data for each illumina library across lanes/inputs"; cd $result
+for (( i=0;  i < ${#lnin_illumina[@]};  i++ )); do x="${lnin_illumina[i]}"; unset r; unset b; unset tmp; unset library; r=($(ls ${x}/*f*q.gz)); b=(${r[*]##*/})
+tmp=(${b[*]%%_*}); library=($(printf "%s\n" "${tmp[@]}" | sort -u)); und="Undetermined"; for (( j=0; j<${#library[@]}; j++ )); do if [[ ${library[j]} == $und ]]
+then library=( "${library[@]:0:$j}" "${library[@]:$((j + 1))}" ); j=$((j - 1)); fi; done #Concatenate below; lcountA is per illumina input. will it be recycled across illumina input checks.
+cd $x; lcountA=${#library[@]}; for lib in ${library[*]}; do max_bg_procs $nprocs; cat ${lib}*_R1*.f*q.gz > \
+${grouped}/${lib}_"tmp$i"_R1.fq.gz && cat ${lib}*_R2*.f*q.gz > ${grouped}/${lib}_"tmp$i"_R2.fq.gz & done; wait #Check for paired below.
+for lib in ${library[*]}; do if [ $(ls ${grouped}/${lib}_"tmp$i"_*.fq.gz | wc -l) -eq 2 ]; then :; else echo -n "raw data grouping halted due to error. report this error to "
+echo "the program developer. exiting"; exit 1; fi; done; cd $result; done; if ls rundate* 1> /dev/null 2>&1; then rm $result/rundate*; fi; if ls userillumina* 1> /dev/null \
+2>&1; then rm $result/userillumina*; fi; unset r; unset b; unset tmp; unset library; r=($(ls ${grouped}*.fq.gz)); b=(${r[*]##*/}); tmp=(${b[*]%%_*}); library=($(printf \
+"%s\n" "${tmp[@]}" | sort -u)); lcountB=${#library[@]}; #below dedup is before group by tmp and after group by lane. all inputs have been combined
+cd ${grouped}; unset files; files=($(find . -maxdepth 1 -type f |cut -d '/' -f2)); if [ "${#files}" -lt 2 ]; then :; else unset files; files="$( ls -l|grep '^-'|awk \
 '{if(a[$5]){ a[$5]=a[$5]"\n"$NF; b[$5]++;} else a[$5]=$NF} END{for(x in b)print a[x];}' )"; for file1 in $files; do for file2 in $files
-do if [[ "$file1" != "$file2" && -e "$file1" && -e "$file2" ]]; then if diff "$file1" "$file2" > /dev/null; then rm -v "$file2"; fi; fi; done; done; for lib in ${library[*]}
-do max_bg_procs $nprocs; cat ${lib}*R1.fq.gz > ${grouped}/${lib}_R1.fq.gz && cat ${lib}*R2.fq.gz > ${grouped}/${lib}_R2.fq.gz & done; wait; sorted_unique_ids=($(echo \
-"${library[@]}" | tr ' ' '\n' | cut -c1,2,3 | sort -u | tr '\n' ' ')); for (( i=0;  i < ${#sorted_unique_ids[@]};  i++ )); do rm ${sorted_unique_ids[i]}*tmp*; done
-if [ -d "${grouped}" ]; then if [ ${#library[@]} -lt 1 ]; then echo "no raw data libraries found after group step. exiting."; exit 1; else :; fi; else echo -n "no grouped "
-echo "folder present. exiting."; exit 1; fi; END_TIME=$(date +%s); echo "elapsed time for grouping $(($END_TIME - $START_TIME)) seconds" 
+do if [[ "$file1" != "$file2" && -e "$file1" && -e "$file2" ]]; then if diff "$file1" "$file2" > /dev/null; then rm -v "$file2"; fi; fi; done; done; fi #below group by tmp then remove.
+for lib in ${library[*]}; do max_bg_procs $nprocs; cat ${lib}*R1.fq.gz > ${grouped}/${lib}_R1.fq.gz && cat ${lib}*R2.fq.gz > ${grouped}/${lib}_R2.fq.gz & done; wait
+sorted_unique_ids=($(echo "${library[@]}" | tr ' ' '\n' | cut -c1,2,3 | sort -u | tr '\n' ' ')) #sorted unique ids only the 1st 3 characters for removing tmp. could fail with very short names.
+for (( i=0;  i < ${#sorted_unique_ids[@]};  i++ )); do rm ${sorted_unique_ids[i]}*tmp*; done; if [ -d "${grouped}" ]; then if [ ${#library[@]} -lt 1 ]; then echo -n "no raw "
+echo "data libraries found after group step. exiting."; exit 1; else :; fi; else echo "no grouped folder present. exiting."; exit 1; fi; END_TIME=$(date +%s); echo \
+"elapsed time for grouping $(($END_TIME - $START_TIME)) seconds"; START_TIME=$(date +%s); unset r; unset b; unset tmp #below final illumina library define before assemblies.
+unset library; r=($(ls ${grouped}*.fq.gz)); b=(${r[*]##*/}); tmp=(${b[*]%%_*}); library=($(printf "%s\n" "${tmp[@]}" | sort -u)); lcountC=${#library[@]}
+if [ ${lcountB} -ne ${lcountC} ]; then echo "total illumina library count changed B to C. ${lcountB} to ${lcountC}. this indicates duplicate files among inputs."
+fi; if [[ -n "$TMPDIR" ]]; then echo "TMPDIR is $TMPDIR"; cd $TMPDIR; fi #below shov assembly. 92-93% more efficient than flye sample data on moose when nprocs ~16 and ~36
+if [ $nprocs -lt 4 ]; then echo -n "GEAbash is unable to obtain at least 4 compute cores to assemble genomes. please run GEAbash on a different resource or at a later time. "
+echo "exiting."; exit 1; fi; echo "starting shovill assemblies"; for lib in ${library[*]}; do max_bg_procs $shov_par; apptainer exec $cont shovill --outdir ${shovill}${lib} \
+--R1 ${grouped}${lib}_R1.fq.gz --R2 ${grouped}${lib}_R2.fq.gz --trim --ram $shov_ram > ${shovill}${lib}_debug 2>&1 & done; wait; for lib in ${library[*]}
+do if [ -d "${shovill}${lib}" ]; then cd ${shovill}${lib}; if [[ -f contigs.fa ]]; then mv ${shovill}${lib}/contigs.fa ${contigdir_illuminas}${lib}.fa; mv \
+${shovill}${lib}/shovill.corrections ${corrections}${lib}_shovill.corrections; mv ${shovill}${lib}/spades.fasta ${spades}${lib}_spades.fasta; mv ${shovill}${lib}/contigs.gfa \
+${sgfa}${lib}_contigs.gfa; mv ${shovill}${lib}/shovill.log ${shlog}${lib}_shovill.log; cd ${shovill}; rm -r ${shovill}${lib}; rm ${shovill}${lib}_debug; else mv \
+${shovill}${lib}/shovill.log ${shlog}${lib}_shovill.log; cd ${shovill}; rm -r ${shovill}${lib}; rm ${shovill}${lib}_debug; echo -n "shovill did not produce contigs from $lib."
+echo " see ${shlog}${lib}_shovill.log for details."; fi; else echo "shovill not run for $lib. check ${shovill}${lib}_debug for more information."; fi; done
+for lib in ${library[*]}; do if [[ -f ${contigdir_illuminas}${lib}.fa ]]; then if [[ $(cat ${contigdir_illuminas}${lib}.fa | wc -l) -eq 0 ]]; then rm \
+${contigdir_illuminas}${lib}.fa; echo "shovill did not produce contigs from $lib. see ${shlog}${lib}_shovill.log for details."; fi; fi; done; if [[ $(ls \
+${contigdir_illuminas} 2> /dev/null | wc -l) -eq 0 ]] ; then echo "assembly with shovill did not produce any contigs for downstream annotation. exiting"; exit 1; fi
+END_TIME=$(date +%s); echo "elapsed time for ${#library[@]} shovill assemblies $(($END_TIME - $START_TIME)) seconds"
+#skesa assembly for small novel plasmids. 45-60% more efficient than shovill on moose when nprocs ~16, ~36 and ~64
+START_TIME=$(date +%s); cd ${skesa}; echo "starting skesa assemblies to detect small novel plasmids"; for lib in ${library[*]}; do max_bg_procs $shov_par; apptainer exec \
+$cont skesa --reads ${grouped}${lib}_R1.fq.gz,${grouped}${lib}_R2.fq.gz --cores $skes_cores --memory $shov_ram > ${lib}.skesa.fa 2>"${lib}_skesa.log" & done; wait
+for lib in ${library[*]}; do if [[ -f ${lib}.skesa.fa ]]; then if [[ $(cat ${lib}.skesa.fa | wc -l) -eq 0 ]]; then rm ${lib}.skesa.fa; echo -n "skesa did not produce contigs "
+echo "from $lib so small novel plasmids can not be searched. see ${skesa}${lib}_skesa.log for details."; fi; else echo -n "skesa did not produce contigs from $lib so small "
+echo "novel plasmids can not be searched. check ${skesa}${lib}_skesa.log for details"; fi; done; for lib in ${library[*]}; do if [[ -f ${lib}.skesa.fa ]]; then grep -A 1 \
+"Circ" ${lib}.skesa.fa > ${lib}_plas.fa; fi; if [[ $(cat ${lib}_plas.fa | wc -l) -eq 0 ]]; then rm ${lib}_plas.fa; fi; done; for lib in ${library[*]}
+do if [[ -f ${lib}.plas.fa ]]; then apptainer exec $cont perl -pi -e "s/^>/>${lib}-/g" ${lib}_plas.fa; fi; done; cat *_plas.fa > ${result}skesa_plasmids.fa; END_TIME=$(date \
++%s); echo -n "elapsed time for ${#library[@]} skesa assemblies $(($END_TIME - $START_TIME)) seconds. $(grep '>' ${result}skesa_plasmids.fa | wc -l) small novel plasmids "
+echo "detected." #below post illumina assembly
+cd $contigdir_illuminas; unset files; files=($(find . -maxdepth 1 -type f |cut -d '/' -f2)); if [ "${#files}" -lt 2 ]; then :; else unset \
+files; files="$( ls -l|grep '^-'|awk '{if(a[$5]){ a[$5]=a[$5]"\n"$NF; b[$5]++;} else a[$5]=$NF} END{for(x in b)print a[x];}' )"; for file1 in $files; do for file2 in $files
+do if [[ "$file1" != "$file2" && -e "$file1" && -e "$file2" ]]; then if diff "$file1" "$file2" > /dev/null; then rm -v "$file2"; fi; fi; done; done; fi; unset r; unset b
+unset tmp; unset library; r=($(ls ${contigdir_illuminas}*.fa)); b=(${r[*]##*/}); tmp=(${b[*]%%_*}); library=($(printf "%s\n" "${tmp[@]}" | sort -u)); lcountD=${#library[@]}
+if [ ${lcountC} -ne ${lcountD} ]; then echo "total illumina library count changed ${lcountC} to ${lcountD}. this would be expected if there were failed shovill assemblies"; fi 
+else :; fi
 
-#assembly.
-START_TIME=$(date +%s); if [[ -n "$TMPDIR" ]]; then echo "TMPDIR is $TMPDIR"; cd $TMPDIR; fi; echo "starting genome assemblies"; for lib in ${library[*]}; do max_bg_procs \
-$shov_par; apptainer exec $cont shovill --outdir ${shovill}${lib} --R1 ${grouped}${lib}_R1.fq.gz --R2 ${grouped}${lib}_R2.fq.gz --trim --ram $shov_ram > \
-${shovill}${lib}_debug 2>&1 & done; wait; for lib in ${library[*]}; do if [ -d "${shovill}${lib}" ]; then cd ${shovill}${lib}; if [[ -f contigs.fa ]]; then mv \
-${shovill}${lib}/contigs.fa ${contigfolder}${lib}.fa; mv ${shovill}${lib}/shovill.corrections ${corrections}${lib}_shovill.corrections; mv ${shovill}${lib}/spades.fasta \
-${spades}${lib}_spades.fasta; mv ${shovill}${lib}/contigs.gfa ${sgfa}${lib}_contigs.gfa; mv ${shovill}${lib}/shovill.log ${shlog}${lib}_shovill.log; cd ${shovill}; rm \
--r ${shovill}${lib}; rm ${shovill}${lib}_debug; else mv ${shovill}${lib}/shovill.log ${shlog}${lib}_shovill.log; cd ${shovill}; rm -r ${shovill}${lib}; rm \
-${shovill}${lib}_debug; echo "shovill did not produce contigs from $lib. see ${shlog}${lib}_shovill.log for details."; fi; else echo -n "shovill not run for $lib. check "
-echo "${shovill}${lib}_debug for more information."; fi; done; for lib in ${library[*]}; do if [[ -f ${contigfolder}${lib}.fa ]]; then if [[ $(cat \
-${contigfolder}${lib}.fa | wc -l) -eq 0 ]]; then rm ${contigfolder}${lib}.fa; echo -n "shovill did not produce contigs from $lib. see "; echo -n "${shlog}${lib}_shovill.log "
-echo "for details."; fi; fi; done; if [[ $(ls ${contigfolder} 2> /dev/null | wc -l) -eq 0 ]] ; then echo -n "assembly with shovill did not produce any contigs for downstream "
-echo "annotation. exiting"; exit 1; fi; cd ${skesa}; skes_cores=$(apptainer exec $cont bc <<<"$nprocs/$shov_par"); for lib in ${library[*]}; do max_bg_procs $shov_par
-apptainer exec $cont skesa --reads ${grouped}${lib}_R1.fq.gz,${grouped}${lib}_R2.fq.gz --cores $skes_cores --memory $shov_ram > ${lib}.skesa.fa 2>"${lib}_skesa.log" & done
-wait; for lib in ${library[*]}; do if [[ -f ${lib}.skesa.fa ]]; then if [[ $(cat ${lib}.skesa.fa | wc -l) -eq 0 ]]; then rm ${lib}.skesa.fa; echo -n "skesa did not produce "
-echo "contigs from $lib so plasmids can not be searched in the skesa assembly. see ${skesa}${lib}_skesa.log for details."; fi; else echo -n "skesa did not create "; echo \
-"${lib}.skesa.fa. check ${skesa}${lib}_skesa.log for details"; fi; done; for lib in ${library[*]}; do if [[ -f ${lib}.skesa.fa ]]; then grep -A 1 "Circ" ${lib}.skesa.fa > \
-${lib}_plas.fa; fi; if [[ $(cat ${lib}_plas.fa | wc -l) -eq 0 ]]; then rm ${lib}_plas.fa; fi; done; for lib in ${library[*]}; do if [[ -f ${lib}.plas.fa ]]; then apptainer \
-exec $cont perl -pi -e "s/^>/>${lib}-/g" ${lib}_plas.fa; fi; done; cat *_plas.fa > ${result}skesa_plasmids.fa; END_TIME=$(date +%s); echo -n "elapsed time for assembling "
-echo "genomes $(($END_TIME - $START_TIME)) seconds."; else :; fi
+#THIS IS THE NEW GROUP + ASSEMBLE LONG CONDITIONAL. it groups across input formats and within folders for all same X_Y. no use case to group across folders. might be hard-to-impossible because it would require
+#decoupling and recoupling the 1-to-1 input-to-input_type and making it NOT 1-to-1.
+if [ "${#lnin_long}" -gt 0 ]; then START_TIME=$(date +%s); echo "grouping raw data for each long-read library for common X_Y named input files in the same input folder"; cd \
+$result; for (( i=0;  i < ${#lnin_long[@]};  i++ )); do x="${lnin_long[i]}"; z="${lon[long$i]}"; unset paths_cur; unset file_names_cur; unset fn_cur_sans_fext; unset Llibrary
+paths_cur=($(ls "${x}")) #below respectively removes all leading backslashes, removes all training extensions beginning with f & keeps unique X_Y.
+file_names_cur=(${paths_cur[*]##*/}); fn_cur_sans_fext=(${file_names_cur[*]%%.f*}); Llibrary=($(printf "%s\n" "${fn_cur_sans_fext[@]}" | cut -f1,2 -d'_' | sort -u))
+mkdir ${groupedL}/${x}; cd $x; LcountA=${#Llibrary[@]} #changed longcount= to Lcount= on 7/24/24; MAKE SURE NO OTHER VARIABLES START WITH 'long'
+for lib in ${Llibrary[*]}; do max_bg_procs $nprocs; cat ${lib}* > ${groupedL}/${x}/${lib} & done; wait #assumes same format if in same folder
+cd ${groupedL}/${x}; unset files; files=($(find . -maxdepth 1 -type f |cut -d '/' -f2)); for (( j=0;  j < ${#files[@]};  j++ )); do file="${files[j]}"
+if [ -n "$(file -ib $file | grep gzip)" ]; then compressed=T; else compressed=F; fi; if [[ "$compressed" == "T" ]]; then isfagz=$(zcat ${file} |head -n 1 |cut -c1-1 |grep \
+'>' |wc -l); isfqgz=$(zcat ${file} |head -n 1 |cut -c1-1 |grep '@' |wc -l); isfa=0; isfq=0; elif [[ "$compressed" == "F" ]]; then isfa=$(head -n 1 ${file} |cut -c1-1 |grep \
+'>' |wc -l); isfq=$(head -n 1 ${file} |cut -c1-1 |grep '@' |wc -l); isfagz=0; isfqgz=0; else echo "an unexpected error occurred during user input evaluation. exiting"; exit 1
+fi; if [ $isfa -eq 1 ]; then mv "${file}" "${file}.fa"; elif [ $isfagz -eq 1 ]; then mv "${file}" "${file}.fa.gz"; elif [ $isfq -eq 1 ]; then mv "${file}" "${file}.fq"
+elif [ $isfqgz -eq 1 ]; then mv "${file}" "${file}.fq.gz"; else echo "$file in ${z} is not in approved format for input to flye. exiting"; exit 1; fi; done #below confirm that file extensions are identical
+ctfagz=$(ls *.fa.gz 2>/dev/null |wc -l); ctfa=$(ls *.fa 2>/dev/null |wc -l); ctfq=$(ls *.fq 2>/dev/null |wc -l); ctfqgz=$(ls *.fq.gz 2>/dev/null |wc -l)
+if [[ $ctfagz -eq 0 && $ctfqgz -eq 0 && $ctfq -eq 0 && $ctfa -gt 0 ]]; then echo "detected file type is fasta for libraries in ${z}"
+elif [[ $ctfagz -eq 0 && $ctfqgz -eq 0 && $ctfq -gt 0 && $ctfa -eq 0 ]]; then echo "detected file type is fastq for libraries in ${z}"
+elif [[ $ctfagz -eq 0 && $ctfqgz -gt 0 && $ctfq -eq 0 && $ctfa -eq 0 ]]; then echo "detected file type is gzipped fastq for libraries in ${z}"
+elif [[ $ctfagz -gt 0 && $ctfqgz -eq 0 && $ctfq -eq 0 && $ctfa -eq 0 ]]; then echo "detected file type is gzipped fasta for libraries in ${z}"; else echo -n "exiting because "
+echo "files in ${z} are not all the same file format."; exit 1; fi; unset files; files=($(find . -maxdepth 1 -type f |cut -d '/' -f2)); if [ "${#files}" -lt 2 ]; then :
+else unset files; files="$( ls -l|grep '^-'|awk '{if(a[$5]){ a[$5]=a[$5]"\n"$NF; b[$5]++;} else a[$5]=$NF} END{for(x in b)print a[x];}' )"; for file1 in $files
+do for file2 in $files; do if [[ "$file1" != "$file2" && -e "$file1" && -e "$file2" ]]; then if diff "$file1" "$file2" > /dev/null; then rm -v "$file2"; fi; fi; done; done; fi
+unset paths_cur; unset file_names_cur; unset fn_cur_sans_fext; unset Llibrary; paths_cur=($(ls)); file_names_cur=(${paths_cur[*]##*/})
+fn_cur_sans_fext=(${file_names_cur[*]%%.f*}); Llibrary=($(printf "%s\n" "${fn_cur_sans_fext[@]}" | cut -f1,2 -d'_' | sort -u)); LcountB=${#Llibrary[@]}
+if [ ${LcountA} -ne ${LcountB} ]; then echo "input long read library count from ${z} changed ${LcountA} to ${LcountB} after disallowing duplicate files"; fi
+cd $result; done; if ls long* 1> /dev/null 2>&1; then rm $result/long*; fi; if [ -d "${groupedL}" ]; then :; else echo -n "an unexpected error occurred. there is no folder "
+echo "present for grouping long reads across multiple files. exiting."; exit 1; fi; END_TIME=$(date +%s); echo "elapsed time for grouping $(($END_TIME - $START_TIME)) seconds"
+START_TIME=$(date +%s); if [ $nprocs -lt 4 ]; then echo -n "GEAbash is unable to obtain at least 4 compute cores to assemble genomes. please run GEAbash on a different "
+echo "resource or at a later time. exiting."; exit 1; fi; echo "starting flye assemblies"; Llibraryct=0; for (( i=0;  i < ${#lnin_long[@]};  i++ )); do x="${lnin_long[i]}"
+y="${flye_types[i]}"; z="${lon[long$i]}"; cd ${groupedL}; unset paths_cur; unset file_names_cur; unset fn_cur_sans_fext; unset Llibrary; paths_cur=($(ls "${x}"))
+paths_cur_sorted=($(printf "%s\n" "${paths_cur[@]}" | sort -u)); file_names_cur=(${paths_cur[*]##*/}); fn_cur_sans_fext=(${file_names_cur[*]%%.f*}); Llibrary=($(printf \
+"%s\n" "${fn_cur_sans_fext[@]}" | cut -f1,2 -d'_' | sort -u)); LcountA=${#Llibrary[@]}; Llibraryct=$(($Llibraryct + ${#Llibrary[@]}))
+for (( j=0;  j < ${#Llibrary[@]};  j++ )); do sstestval=$(echo "${paths_cur_sorted[j]}" |grep "${Llibrary[j]}" |wc -l); if [ $sstestval -ne 1 ]; then echo -n "the flye input "
+echo "sorter produced incompatible arrays and needs to be debugged. exiting"; exit 1; fi; done; nthreads="$(($nprocs-4))"; for (( j=0;  j < ${#Llibrary[@]};  j++ )) #nthreads will need defined 1x
+do seqct=$(apptainer exec $cont seqkit stats ${x}/${paths_cur_sorted[j]} -j $nthreads |tr -s ' ' |cut -d ' ' -f4 |tail -n +2 |sed -e 's/,//g' |awk '{s+=$1} END {print s}') #this fails for space
+#in directory name or file name. below seqkit quiet incomplete & redirect not working
+if [ $seqct -gt $ssds ]; then apptainer exec $cont seqkit fq2fa --quiet ${x}/${paths_cur_sorted[j]} -j $nthreads |apptainer exec $cont seqkit sort --quiet -l -r -2 -j \
+$nthreads |apptainer exec $cont seqkit head --quiet -j $nthreads -n $ssds > sizeselect.fa; seqct=$(apptainer exec $cont seqkit stats sizeselect.fa -j $nthreads |tr -s \
+' ' |cut -d ' ' -f4 |tail -n +2 |sed -e 's/,//g' |awk '{s+=$1} END {print s}'); max_ss=$(apptainer exec $cont seqkit stats sizeselect.fa -j $nthreads |tr -s ' ' |cut -d ' ' \
+-f8 |tail -n +2 |sed -e 's/,//g' |awk '{s+=$1} END {print s}'); max_orig=$(apptainer exec $cont seqkit stats ${x}/${paths_cur_sorted[j]} -j $nthreads |tr -s ' ' |cut -d ' ' \
+-f8 |tail -n +2 |sed -e 's/,//g' |awk '{s+=$1} END {print s}'); if [ $max_ss -eq $max_orig ]; then rm ${x}/${paths_cur_sorted[j]} #rm precedes mv for cases of no name change
+mv sizeselect.fa ${x}/${Llibrary[j]}.fa; rm stdin.fastx; rm stdin.fastx.seqkit.fai; else echo -n "original maximum long read length: $max_orig changed to $max_ss after size "
+echo "select downsampling for ${x}/${paths_cur_sorted[j]}. please report this error. exiting"; exit 1; fi; else :; fi; done; unset paths_cur; unset file_names_cur; unset \
+fn_cur_sans_fext; unset Llibrary; paths_cur=($(ls "${x}")); paths_cur_sorted=($(printf "%s\n" "${paths_cur[@]}" | sort -u)); file_names_cur=(${paths_cur[*]##*/})
+fn_cur_sans_fext=(${file_names_cur[*]%%.f*}); Llibrary=($(printf "%s\n" "${fn_cur_sans_fext[@]}" | cut -f1,2 -d'_' | sort -u)); if [ ${#Llibrary[@]} -gt 1 ]
+#do a max_bg_procs loop over longlibrary. can't take advantage across links without grouping.
+then for (( j=0;  j < ${#Llibrary[@]};  j++ )); do max_bg_procs $shov_par; apptainer exec --app flye $cont flye --${y} ${x}/${paths_cur_sorted[j]} --out-dir ${flye}${Llibrary[j]} \
+--threads $skes_cores > ${flye}${Llibrary[j]}_debug 2>&1 & done; wait; else for (( j=0;  j < ${#Llibrary[@]};  j++ )); do apptainer exec --app flye $cont flye --${y} \
+${x}/${paths_cur_sorted[j]} --out-dir ${flye}${Llibrary[j]} --threads $nprocs > ${flye}${Llibrary[j]}_debug 2>&1; done; fi; for (( j=0;  j < ${#Llibrary[@]};  j++ ))
+do if [ -d "${flye}${Llibrary[j]}" ]; then cd ${flye}${Llibrary[j]}; if [[ -f assembly.fasta ]]; then mv assembly.fasta ${contigdir_longs}${Llibrary[j]}.fa; mv flye.log \
+${flog}${Llibrary[j]}.log; mv assembly_info.txt ${finfo}${Llibrary[j]}.txt; cd ${flye}; rm -r ${Llibrary[j]} ${Llibrary[j]}_debug
+else echo "flye did not produce contigs from ${Llibrary[j]}. see ${flye}${Llibrary[j]}/flye.log for details."; fi; else echo -n "no ${flye}${Llibrary[j]} was created. report "
+echo "this to the developer. exiting"; exit 1; fi; done; cd ${groupedL}; done; END_TIME=$(date +%s); echo "elapsed time for ${Llibraryct} flye assemblies $(($END_TIME - $START_TIME)) seconds"
+unset paths_cur; unset file_names_cur; unset fn_cur_sans_fext; unset Llibrary; paths_cur=($(ls "${contigdir_longs}")); file_names_cur=(${paths_cur[*]##*/})
+fn_cur_sans_fext=(${file_names_cur[*]%%.f*}); Llibrary=($(printf "%s\n" "${fn_cur_sans_fext[@]}" | cut -f1,2 -d'_' | sort -u)); LcountB=${#Llibrary[@]}; unset files
+files=($(find . -maxdepth 1 -type f |cut -d '/' -f2)); if [ "${#files}" -lt 2 ]; then :; else unset files; files="$( ls -l|grep '^-'|awk \
+'{if(a[$5]){ a[$5]=a[$5]"\n"$NF; b[$5]++;} else a[$5]=$NF} END{for(x in b)print a[x];}' )"; for file1 in $files; do for file2 in $files
+do if [[ "$file1" != "$file2" && -e "$file1" && -e "$file2" ]]; then if diff "$file1" "$file2" > /dev/null; then rm -v "$file2"; fi; fi; done; done; fi; unset paths_cur
+unset file_names_cur; unset fn_cur_sans_fext; unset Llibrary; paths_cur=($(ls "${contigdir_longs}")); file_names_cur=(${paths_cur[*]##*/})
+fn_cur_sans_fext=(${file_names_cur[*]%%.f*}); Llibrary=($(printf "%s\n" "${fn_cur_sans_fext[@]}" | cut -f1,2 -d'_' | sort -u)); LcountC=${#Llibrary[@]}
+if [ ${LcountB} -gt ${LcountC} ]; then echo "total long read library count changed ${LcountB} to ${LcountC} after disallowing duplicate assembly files"; fi; else :; fi
+#THIS IS THE NEW GROUP + ASSEMBLE LONG CONDITIONAL. it groups across input formats and within folders for all same X_Y
 
-#redefine library
-cd ${contigfolder}; files="$( ls -l|grep '^-'|awk '{if(a[$5]){ a[$5]=a[$5]"\n"$NF; b[$5]++;} else a[$5]=$NF} END{for(x in b)print a[x];}' )"; for file1 in $files
-do for file2 in $files; do if [[ "$file1" != "$file2" && -e "$file1" && -e "$file2" ]]; then if diff "$file1" "$file2" > /dev/null; then rm -v "$file2"; fi; fi; done; done
-unset r; unset b; unset tmp; unset library; r=($(ls ${contigfolder}*.fa 2> /dev/null)); b=(${r[*]##*/}); tmp=(${b[*]%.*}); library=($(printf "%s\n" "${tmp[@]}" | sort -u))
-
-#annotation programs: plasmid
-cd ${tempdir}; START_TIME=$(date +%s); echo "starting plasmid detection"; for lib in ${library[*]}; do max_bg_procs $nprocs; mkdir ${lib} && apptainer \
-exec --app cge $cont plasmidfinder.py -i ${contigfolder}${lib}.fa -o ${lib} -p ${plfdb} -mp blastn -t 0.9 -l 0.8 -x -q > ${lib}_plasmidfinder.log 2>&1 && mv \
-${lib}/results_tab.tsv ${plasmid}${lib}_plasfinder.tsv && mv ${lib}_plasmidfinder.log ${plasmid}${lib}_plasmidfinder.log && rm -r ${lib} & done; wait; END_TIME=$(date +%s)
-echo "elapsed time for plasmid detection $(($END_TIME - $START_TIME)) seconds."
-#mlst. eval/sval calculation excludes ecoli adk (NR>2 excludes both header and first row). as of v0.0.3 awk floating point calculations use container awk.
-START_TIME=$(date +%s); echo "starting mlstyping"; cd $HOME/share; if [ -d "$organism1" ]; then cd $organism1; else mkdir $organism1; cd $organism1
-fi; if [[ -d "$dbserver1" && $(ls ${dbserver1} | wc -l) -eq 0 ]]; then rm -rf ${dbserver1}; fi; if [ $(ls ${dbserver1} 2>/dev/null | wc -l) -gt 0 ]; then :
-if [[ "$ucge" = T ]]; then rm -rf ${mdb}; apptainer exec $cont git clone https://bitbucket.org/genomicepidemiology/mlst_db.git &> clonelog; else :; fi; else apptainer \
-exec $cont git clone https://bitbucket.org/genomicepidemiology/mlst_db.git &> clonelog; ud=$(date +%Y/%m/%d); echo "mlst database created by $username on $ud"; fi; cd \
-${tempdir}; for lib in ${library[*]}; do mkdir ${lib}; done; for lib in ${library[*]}; do max_bg_procs $cgeprocs; apptainer exec --app cge $cont mlst.py \
--i ${contigfolder}${lib}.fa -o ${lib} -p ${mdb} -s ecoli -x -t ${lib} -st > ${lib}_ecolimlst.log 2>&1 & done; wait; for lib in ${library[*]}; do cd ${tempdir}${lib}; mv \
-data.json ecolidata.json; mv MLST_allele_seq.fsa ecoliMLST_allele_seq.fsa; mv results.txt ecoliresults.txt; mv Hit_in_genome_seq.fsa ecoliHit_in_genome_seq.fsa; mv \
-results_tab.tsv ecoliresults_tab.tsv; if [[ -d tmp ]]; then rm -r tmp; fi; cd ${tempdir};done; for lib in ${library[*]}; do max_bg_procs $cgeprocs; apptainer \
-exec --app cge $cont mlst.py -i ${contigfolder}${lib}.fa -o ${lib} -p ${mdb} -s senterica -x -t ${lib} -st > ${lib}_sentericamlst.log 2>&1 & done; wait
-for lib in ${library[*]}; do cd ${tempdir}${lib}; mv data.json sentericadata.json; mv MLST_allele_seq.fsa sentericaMLST_allele_seq.fsa; mv results.txt sentericaresults.txt
-mv Hit_in_genome_seq.fsa sentericaHit_in_genome_seq.fsa; mv results_tab.tsv sentericaresults_tab.tsv; if [[ -d tmp ]]; then rm -r tmp; fi; done; for lib in ${library[*]}
-do cd ${tempdir}${lib}; if [[ "$taxon" == "both" ]]; then eval=$(apptainer exec $cont awk 'NR>2 { sum += $2; n++ } END { if (n > 0) print sum / n; }' ecoliresults_tab.tsv)
-sval=$(apptainer exec $cont awk 'NR>1 { sum += $2; n++ } END { if (n > 0) print sum / n; }' sentericaresults_tab.tsv); if [[ $(echo $eval | apptainer exec $cont awk \
-'{print int($1+0.5)}') -lt 90 && $(echo $sval | apptainer exec $cont awk '{print int($1+0.5)}') -lt 90 ]]; then corval="unidentified"; echo -n "mlst.py was run against both "
-echo "the ecoli and senterica databases. $lib was not a good match for either"; else corval=$(if (( $(apptainer exec $cont bc <<<"$eval < $sval") )); then echo "senterica"
-elif (( $(apptainer exec $cont bc <<<"$eval > $sval") )); then echo "ecoli"; else echo "unidentified"; fi); echo -n "mlst.py was run against both the ecoli and senterica "
-echo "databases. $lib was a better match to $corval"; fi; else corval=$taxon; fi; if [[ $corval == "unidentified" ]]; then cd ${tempdir}; mv ${lib}_ecolimlst.log ${mlst}; mv \
-${lib}_sentericamlst.log ${mlst}; rm -r ${lib}; else mv ${corval}results.txt ${mlst}${corval}/${lib}_results.txt; mv ${corval}results_tab.tsv \
-${mlst}${corval}/${lib}_results_tab.tsv; cd ${tempdir}; mv ${lib}_${corval}mlst.log ${mlst}${corval}/; rm -r ${lib}; fi; done; e=($(ls ${ecoli_mlst}*.tsv 2> /dev/null))
-b=(${e[*]##*/}); tmp=(${b[*]%_results_tab.*}); elibrary=($(printf "%s\n" "${tmp[@]}" | sort -u)); s=($(ls ${senterica_mlst}*.tsv 2> /dev/null)); b=(${s[*]##*/})
-tmp=(${b[*]%_results_tab.*}); slibrary=($(printf "%s\n" "${tmp[@]}" | sort -u)); olibrary=" ${library[*]} "; for i in ${elibrary[@]}; do olibrary=${olibrary/ ${i} / }; done
-for i in ${slibrary[@]}; do olibrary=${olibrary/ ${i} / }; done; olibrary=( $olibrary ); END_TIME=$(date +%s); echo \
-"elapsed time for mlstyping $(($END_TIME - $START_TIME)) seconds."
-#serotyping plus db
+#annotation staging. https://stackoverflow.com/questions/3601515/how-to-check-if-a-variable-is-set-in-bash. currently double brackets. answer is single brackets but not &&. working as expected.
+if [[ -z ${library+x} && -z ${Llibrary+x} ]]; then contigfolder=$contigdir_userFA; elif [[ -z ${clibrary+x} && -z ${Llibrary+x} ]]; then contigfolder=$contigdir_illuminas
+elif [[ -z ${clibrary+x} && -z ${library+x} ]]; then contigfolder=$contigdir_longs; elif [[ -z ${Llibrary+x} ]]; then contigfolder=$contigdir_userFA; cp \
+${contigdir_illuminas}* $contigfolder; elif [[ -z ${library+x} ]]; then contigfolder=$contigdir_userFA; cp ${contigdir_longs}* $contigfolder; elif [[ -z ${clibrary+x}  ]]
+then contigfolder=$contigdir_userFA; mkdir $contigfolder; cp ${contigdir_illuminas}* $contigfolder; cp ${contigdir_longs}* $contigfolder; else contigfolder=$contigdir_userFA
+cp ${contigdir_illuminas}* $contigfolder; cp ${contigdir_longs}* $contigfolder; fi #below redefine library based on input contig streams
+cd ${contigfolder}; unset r; unset b; unset tmp; unset library; r=($(ls ${contigfolder}*.fa 2> /dev/null)); b=(${r[*]##*/}); tmp=(${b[*]%.*}); library=($(printf "%s\n" \
+"${tmp[@]}" | sort -u)); lcountF=${#library[@]}; unset files; files=($(find . -maxdepth 1 -type f |cut -d '/' -f2)); if [ "${#files}" -lt 2 ]; then :; else unset files
+files="$( ls -l|grep '^-'|awk '{if(a[$5]){ a[$5]=a[$5]"\n"$NF; b[$5]++;} else a[$5]=$NF} END{for(x in b)print a[x];}' )"; for file1 in $files; do for file2 in $files
+do if [[ "$file1" != "$file2" && -e "$file1" && -e "$file2" ]]; then if diff "$file1" "$file2" > /dev/null; then rm -v "$file2"; fi; fi; done; done; fi; unset r; unset b
+unset tmp; unset library; r=($(ls ${contigfolder}*.fa 2> /dev/null)); b=(${r[*]##*/}); tmp=(${b[*]%.*}); library=($(printf "%s\n" "${tmp[@]}" | sort -u))
+lcountG=${#library[@]}; if [ ${lcountF} -gt ${lcountG} ]; then echo "total library count changed ${lcountF} to ${lcountG} after disallowing duplicate files before annotation"
+fi #pre-annotate nprocs catch. annotation programs: plasmid
+if [ $nprocs -lt 2 ]; then echo -n "GEAbash is unable to obtain at least 2 compute cores to annotate contigs. please run GEAbash on a different resource or at a later time. "
+echo "exiting."; exit 1; fi; cd ${tempdir}; START_TIME=$(date +%s); echo "starting plasmidfinder"; for lib in ${library[*]}; do max_bg_procs $nprocs; mkdir \
+${lib} && apptainer exec --app cge $cont plasmidfinder.py -i ${contigfolder}${lib}.fa -o ${lib} -p ${plfdb} -mp blastn -t 0.9 -l 0.8 -x -q > ${lib}_plasmidfinder.log \
+2>&1 && mv ${lib}/results_tab.tsv ${plasmid}${lib}_plasfinder.tsv && mv ${lib}_plasmidfinder.log ${plasmid}${lib}_plasmidfinder.log && rm -r ${lib} & done; wait
+END_TIME=$(date +%s); echo "elapsed time for plasmid detection $(($END_TIME - $START_TIME)) seconds." #mlst below. eval/sval calculation excludes ecoli adk.
+START_TIME=$(date +%s); echo "starting mlstyping"; cd $HOME/share; if [ -d "$organism1" ]; then cd $organism1; else mkdir $organism1; cd $organism1; fi
+if [[ -d "$dbserver1" && $(ls ${dbserver1} | wc -l) -eq 0 ]]; then rm -rf ${dbserver1}; fi; if [ $(ls ${dbserver1} 2>/dev/null | wc -l) -gt 0 ]; then :; if [[ "$ucge" = T ]]
+then rm -rf ${mdb}; apptainer exec $cont git clone https://bitbucket.org/genomicepidemiology/mlst_db.git &> clonelog; else :; fi; else apptainer exec $cont git clone \
+https://bitbucket.org/genomicepidemiology/mlst_db.git &> clonelog; ud=$(date +%Y/%m/%d); echo "mlst database created by $username on $ud"; fi; cd ${tempdir}
+for lib in ${library[*]}; do mkdir ${lib}; done; for lib in ${library[*]}; do max_bg_procs $cgeprocs; apptainer exec --app cge $cont mlst.py -i ${contigfolder}${lib}.fa -o \
+${lib} -p ${mdb} -s ecoli -x -t ${lib} -st > ${lib}_ecolimlst.log 2>&1 & done; wait; for lib in ${library[*]}; do cd ${tempdir}${lib}; mv data.json ecolidata.json; mv \
+MLST_allele_seq.fsa ecoliMLST_allele_seq.fsa; mv results.txt ecoliresults.txt; mv Hit_in_genome_seq.fsa ecoliHit_in_genome_seq.fsa; mv results_tab.tsv ecoliresults_tab.tsv
+if [[ -d tmp ]]; then rm -r tmp; fi; cd ${tempdir};done; for lib in ${library[*]}; do max_bg_procs $cgeprocs; apptainer exec --app cge $cont mlst.py -i \
+${contigfolder}${lib}.fa -o ${lib} -p ${mdb} -s senterica -x -t ${lib} -st > ${lib}_sentericamlst.log 2>&1 & done; wait; for lib in ${library[*]}; do cd ${tempdir}${lib}; mv \
+data.json sentericadata.json; mv MLST_allele_seq.fsa sentericaMLST_allele_seq.fsa; mv results.txt sentericaresults.txt; mv Hit_in_genome_seq.fsa sentericaHit_in_genome_seq.fsa
+mv results_tab.tsv sentericaresults_tab.tsv; if [[ -d tmp ]]; then rm -r tmp; fi; done; for lib in ${library[*]}; do cd ${tempdir}${lib}; if [[ "$taxon" == "both" ]]
+then eval=$(apptainer exec $cont awk 'NR>2 { sum += $2; n++ } END { if (n > 0) print sum / n; }' ecoliresults_tab.tsv); sval=$(apptainer exec $cont awk \
+'NR>1 { sum += $2; n++ } END { if (n > 0) print sum / n; }' sentericaresults_tab.tsv); if [[ $(echo $eval | apptainer exec $cont awk '{print int($1+0.5)}') -lt 90 && $(echo \
+$sval | apptainer exec $cont awk '{print int($1+0.5)}') -lt 90 ]]; then corval="unidentified"; echo -n "mlst.py was run against both the ecoli and senterica databases. $lib "
+echo "was not a good match for either"; else corval=$(if (( $(apptainer exec $cont bc <<<"$eval < $sval") )); then echo "senterica"; elif (( $(apptainer exec $cont bc \
+<<<"$eval > $sval") )); then echo "ecoli"; else echo "unidentified"; fi); echo -n "mlst.py was run against both the ecoli and senterica databases. $lib was a better match to "
+echo "$corval"; fi; else corval=$taxon; fi; if [[ $corval == "unidentified" ]]; then cd ${tempdir}; mv ${lib}_ecolimlst.log ${mlst}; mv ${lib}_sentericamlst.log ${mlst}; rm \
+-r ${lib}; else mv ${corval}results.txt ${mlst}${corval}/${lib}_results.txt; mv ${corval}results_tab.tsv ${mlst}${corval}/${lib}_results_tab.tsv; cd ${tempdir}; mv \
+${lib}_${corval}mlst.log ${mlst}${corval}/; rm -r ${lib}; fi; done; e=($(ls ${ecoli_mlst}*.tsv 2> /dev/null)); b=(${e[*]##*/}); tmp=(${b[*]%_results_tab.*})
+elibrary=($(printf "%s\n" "${tmp[@]}" | sort -u)); s=($(ls ${senterica_mlst}*.tsv 2> /dev/null)); b=(${s[*]##*/}); tmp=(${b[*]%_results_tab.*}); slibrary=($(printf "%s\n" \
+"${tmp[@]}" | sort -u)); olibrary=" ${library[*]} "; for i in ${elibrary[@]}; do olibrary=${olibrary/ ${i} / }; done; for i in ${slibrary[@]}; do olibrary=${olibrary/ ${i} / }
+done; olibrary=( $olibrary ); END_TIME=$(date +%s); echo "elapsed time for mlstyping $(($END_TIME - $START_TIME)) seconds." #below serotyping plus db
 START_TIME=$(date +%s); echo "starting serotyping"; if [ "${#elibrary}" -gt 0 ]; then cd $HOME/share; if [ -d "$organism2" ]; then cd $organism2; else mkdir $organism2; cd \
 $organism2; fi; if [[ -d "$dbserver2" && $(ls ${dbserver2} | wc -l) -eq 0 ]]; then rm -rf ${dbserver2}; fi; if [ $(ls ${dbserver2} 2>/dev/null | wc -l) -gt 0 ]; then :
 if [[ "$ucge" = T ]]; then rm -rf ${sdb}; apptainer exec $cont git clone https://bitbucket.org/genomicepidemiology/serotypefinder_db.git; else :; fi; else apptainer \
 exec $cont git clone https://bitbucket.org/genomicepidemiology/serotypefinder_db.git; ud=$(date +%Y/%m/%d); echo "serotypefinder database created by $username on $ud"; fi
-cd ${tempdir}; for elib in ${elibrary[*]}; do mkdir ${elib}; done; wait; for elib in ${elibrary[*]}; do max_bg_procs $nprocs; apptainer \
-exec --app cge $cont serotypefinder.py -i ${contigfolder}${elib}.fa -o ${elib} -p ${sdb} -t 0.95 -l 0.80 -x -q > ${elib}_serotypefinder.log 2>&1 & done; wait
-for elib in ${elibrary[*]}; do mv ${elib}/results_tab.tsv ${serotype}${elib}_sfinder_result.tsv; mv ${elib}_serotypefinder.log ${serotype}; rm -r ${elib}; done; fi
-if [ "${#slibrary}" -gt 0 ]; then for slib in ${slibrary[*]}; do mkdir ${slib}; done; for slib in ${slibrary[*]}; do max_bg_procs $nprocs; apptainer \
-exec --app seqsero $cont SeqSero2_package.py -m k -t 4 -i ${contigfolder}${slib}.fa -d ${slib} > ${slib}_seqsero.log 2>&1 & done; wait; for slib in ${slibrary[*]}; do mv \
-${slib}/SeqSero_result.txt ${serotype}${slib}_seqsero2_result.txt; mv ${slib}_seqsero.log ${serotype}; rm -r ${slib}; done; wait; fi; END_TIME=$(date +%s); echo -n "elapsed "
-echo "time for serotyping $(($END_TIME - $START_TIME)) seconds."
-#resistance. 5/14/24 caught error in how $lib was echoed. followed ${var} like asseembly section to fix
+cd ${tempdir}; for elib in ${elibrary[*]}; do mkdir ${elib}; done; wait; for elib in ${elibrary[*]}; do max_bg_procs $nprocs; apptainer exec --app cge $cont \
+serotypefinder.py -i ${contigfolder}${elib}.fa -o ${elib} -p ${sdb} -t 0.95 -l 0.80 -x -q > ${elib}_serotypefinder.log 2>&1 & done; wait; for elib in ${elibrary[*]}; do mv \
+${elib}/results_tab.tsv ${serotype}${elib}_sfinder_result.tsv; mv ${elib}_serotypefinder.log ${serotype}; rm -r ${elib}; done; fi; if [ "${#slibrary}" -gt 0 ]
+then for slib in ${slibrary[*]}; do mkdir ${slib}; done; for slib in ${slibrary[*]}; do max_bg_procs $nprocs; apptainer exec --app seqsero $cont SeqSero2_package.py -m k -t \
+4 -i ${contigfolder}${slib}.fa -d ${slib} > ${slib}_seqsero.log 2>&1 & done; wait; for slib in ${slibrary[*]}; do mv ${slib}/SeqSero_result.txt \
+${serotype}${slib}_seqsero2_result.txt; mv ${slib}_seqsero.log ${serotype}; rm -r ${slib}; done; wait; fi; END_TIME=$(date +%s); echo -n "elapsed time for serotyping "; echo \
+"$(($END_TIME - $START_TIME)) seconds." #resistance below. 5/14/24 caught error in how $lib was echoed. followed ${var} like asseembly section to fix.
 if [ "${#slibrary}" -gt 0 ]; then START_TIME=$(date +%s); echo "starting resfinder for salmonella"; mkdir ${pofs}; for slib in ${slibrary[*]}; do mkdir ${slib}; done
 for slib in ${slibrary[*]}; do max_bg_procs $cgeprocs; apptainer exec --app resfinder $cont python3 -m resfinder -ifa ${contigfolder}${slib}.fa -o ${slib} -db_res ${rfdb} \
 -db_point ${pofdb} -acq -c -s salmonella -t 0.9 -l 0.8 -t_p 0.9 -l_p 0.8 -b blastn > ${slib}_resfinder.log 2>&1 & done; wait; for slib in ${slibrary[*]}
@@ -255,8 +348,7 @@ if [[ $(grep Error ${olib}_resfinder.log | wc -l) -gt 0 ]]; then echo -n "There 
 echo "annotations will be provided."; for (( j=0; j<${#olibrary[@]}; j++ )); do if [[ ${olibrary[j]} == $olib ]]
 then olibrary=( "${olibrary[@]:0:$j}" "${olibrary[@]:$((j + 1))}" ); j=$((j - 1)); fi; done; mv ${olib}_resfinder.log $refi; break; fi; done; done; for olib in ${olibrary[*]}
 do mv ${olib}/ResFinder_results_tab.txt ${refi}${olib}_tab.tsv; mv ${olib}_resfinder.log ${refi}; rm -r ${olib}; done; END_TIME=$(date +%s); echo \
-"elapsed time for unidentified resfinder $(($END_TIME - $START_TIME)) seconds"; fi
-#blast 5 loci
+"elapsed time for unidentified resfinder $(($END_TIME - $START_TIME)) seconds"; fi #5 loci below
 START_TIME=$(date +%s); echo "starting blast loci detection"; nthreads="$(($nprocs-4))"; if [ "${#elibrary}" -gt 0 ]; then export BLASTDB=$BLASTDB:${blastdb}/${dbname2}
 for elib in ${elibrary[*]}; do apptainer exec $cont blastn -task megablast -query ${contigfolder}${elib}.fa -db ${dbname2} -out ${blast_res}${elib}.${dbname2}blast.txt \
 -num_threads $nthreads -outfmt '6 std'; export BLASTDB=$BLASTDB:${blastdb}/${dbname3}; apptainer exec $cont blastn -task megablast -query ${contigfolder}${elib}.fa \
@@ -271,22 +363,26 @@ if [ "${#elibrary}" -gt 0 ]; then START_TIME=$(date +%s); echo "starting virulen
 $organism6; cd $organism6; fi; if [[ -d "$dbserver6" && $(ls ${dbserver6} | wc -l) -eq 0 ]]; then rm -rf ${dbserver6}; fi; if [ $(ls ${dbserver6} 2>/dev/null | wc -l) -gt 0 ]
 then :; if [[ "$ucge" = T ]]; then rm -rf ${vfdb}; apptainer exec $cont git clone https://bitbucket.org/genomicepidemiology/virulencefinder_db.git; else :; fi
 else apptainer exec $cont git clone https://bitbucket.org/genomicepidemiology/virulencefinder_db.git; ud=$(date +%Y/%m/%d); echo -n "virulencefinder database created by "
-echo "$username on $ud"; fi; mkdir ${virulence}; cd ${tempdir}; for elib in ${elibrary[*]}; do max_bg_procs $nprocs; mkdir ${elib} && apptainer \
-exec --app cge $cont virulencefinder.py -i ${contigfolder}${elib}.fa -o ${elib} -d virulence_ecoli -p ${vfdb} -mp blastn -t 0.95 -l 0.80 -x -q > \
-${elib}_virulencefinder.log 2>&1 && mv ${elib}/results_tab.tsv ${virulence}${elib}_virfinder_result.tsv && mv ${elib}_virulencefinder.log \
-${virulence}${elib}_virulencefinder.log && rm -r ${elib} & done; wait; END_TIME=$(date +%s); echo "elapsed time for virulence detection $(($END_TIME - $START_TIME)) seconds."
-START_TIME=$(date +%s); echo "starting clermont typing"; mkdir ${clermont}; cd ${clermont}; for elib in ${elibrary[*]}; do max_bg_procs $nprocs; apptainer \
-exec --app clermont $cont ezclermont ${contigfolder}${elib}.fa >> ${elib}.txt 2>> ${elib}_ezclermont.log & done; wait; END_TIME=$(date +%s); echo -n "elapsed time for "
-echo "clermont typing $(($END_TIME - $START_TIME)) seconds."; START_TIME=$(date +%s); echo "starting fimH typing"; cd $HOME/share; if [ -d "$organism7" ]; then cd $organism7
-else mkdir $organism7; cd $organism7; fi; if [[ -d "$dbserver7" && $(ls ${dbserver7} | wc -l) -eq 0 ]]; then rm -rf ${dbserver7}; fi
-if [ $(ls ${dbserver7} 2>/dev/null | wc -l) -gt 0 ]; then :; if [[ "$ucge" = T ]]; then rm -rf ${ftdb}; apptainer exec $cont git clone \
-https://bitbucket.org/genomicepidemiology/fimtyper_db.git; else :; fi; else apptainer exec $cont git clone https://bitbucket.org/genomicepidemiology/fimtyper_db.git
-ud=$(date +%Y/%m/%d); echo "fimtyper database created by $username on $ud"; fi; mkdir ${fimht}; cd ${tempdir}; for elib in ${elibrary[*]}; do mkdir ${elib} & done; wait
-for elib in ${elibrary[*]}; do max_bg_procs $nprocs; apptainer exec $cont fimtyper.pl -i ${contigfolder}${elib}.fa -o ${elib} -d ${ftdb} -k '95.0' -l 0.8 > \
-${elib}_fimtyper.log 2>&1 & done; wait; for elib in ${elibrary[*]}; do if [[ -f ${elib}/results_tab.txt ]]; then mv ${elib}/results_tab.txt ${fimht}${elib}_fimht_tab.txt; mv \
-${elib}_fimtyper.log ${fimht}; rm \-r ${elib}; else echo "fimtyper result not produced. exiting"; exit 1; fi; done; END_TIME=$(date +%s); echo -n "elapsed time for Fim typing"
-echo " $(($END_TIME - $START_TIME)) seconds."; fi
-#prepare metadata. virmax etc. is different for each dataset.
+echo "$username on $ud"; fi; mkdir ${virulence}; cd ${tempdir}; for elib in ${elibrary[*]}; do mkdir ${elib}; done; for elib in ${elibrary[*]}; do max_bg_procs $nprocs
+apptainer exec --app virulencefinder $cont python3 -m virulencefinder -ifa ${contigfolder}${elib}.fa -o ${elib} -p ${vfdb} -b blastn -t 0.95 -l 0.80 -q -x > \
+${elib}_virulencefinder.log 2>&1 & done; wait; for elib in ${elibrary[*]}; do while [[ ! -f "${elib}/results.txt" ]]; do sleep 10; if [[ $(grep Error \
+${elib}_virulencefinder.log | wc -l) -gt 0 ]]; then echo -n "There is a virulencefinder error for $elib. The log will be saved in ${virulence}${elib}_virulencefinder.log. No "
+echo "annotations will be provided."; for (( j=0; j<${#elibrary[@]}; j++ )); do if [[ ${elibrary[j]} == $elib ]]
+then elibrary=( "${elibrary[@]:0:$j}" "${elibrary[@]:$((j + 1))}" ); j=$((j - 1)); fi; done; mv ${elib}_virulencefinder.log $virulence; break; fi; done; done #modified resfinder error catch just in case 
+for elib in ${elibrary[*]}; do mv ${elib}/results_tab.tsv ${virulence}${elib}_virfinder_result.tsv; mv ${elib}_virulencefinder.log ${virulence}${elib}_virulencefinder.log
+rm -r ${elib}; done; END_TIME=$(date +%s); echo "elapsed time for virulence detection $(($END_TIME - $START_TIME)) seconds."; START_TIME=$(date +%s); echo -n "starting "
+echo "clermont typing"; mkdir ${clermont}; cd ${clermont}; for elib in ${elibrary[*]}; do max_bg_procs $nprocs; apptainer exec --app clermont $cont ezclermont \
+${contigfolder}${elib}.fa >> ${elib}.txt 2>> ${elib}_ezclermont.log & done; wait; END_TIME=$(date +%s); echo -n "elapsed time for clermont typing $(($END_TIME - $START_TIME))"
+echo " seconds."; START_TIME=$(date +%s); echo "starting fimH typing"; cd $HOME/share; if [ -d "$organism7" ]; then cd $organism7; else mkdir $organism7; cd $organism7; fi
+if [[ -d "$dbserver7" && $(ls ${dbserver7} | wc -l) -eq 0 ]]; then rm -rf ${dbserver7}; fi; if [ $(ls ${dbserver7} 2>/dev/null | wc -l) -gt 0 ]; then :; if [[ "$ucge" = T ]]
+then rm -rf ${ftdb}; apptainer exec $cont git clone https://bitbucket.org/genomicepidemiology/fimtyper_db.git; else :; fi; else apptainer exec $cont git clone \
+https://bitbucket.org/genomicepidemiology/fimtyper_db.git; ud=$(date +%Y/%m/%d); echo "fimtyper database created by $username on $ud"; fi; mkdir ${fimht}; cd ${tempdir}
+for elib in ${elibrary[*]}; do mkdir ${elib} & done; wait; for elib in ${elibrary[*]}; do max_bg_procs $nprocs; apptainer exec $cont fimtyper.pl -i ${contigfolder}${elib}.fa \
+-o ${elib} -d ${ftdb} -k '95.0' -l 0.8 > ${elib}_fimtyper.log 2>&1 & done; wait; for elib in ${elibrary[*]}; do if [[ -f ${elib}/results_tab.txt ]]; then mv \
+${elib}/results_tab.txt ${fimht}${elib}_fimht_tab.txt; mv ${elib}_fimtyper.log ${fimht}; rm \-r ${elib}; else echo "fimtyper result not produced. exiting"; exit 1; fi; done
+END_TIME=$(date +%s); echo "elapsed time for Fim typing $(($END_TIME - $START_TIME)) seconds."; fi 
+
+#annotate; prepare metadata
 metafile=${result}/metadata.txt; touch ${metafile}; echo -ne "Library\tSpecies\tAssembly_bp\tNcontigs\tGC\tN50\tL50\tMLST_Allele_Profile\t" >> ${metafile}; echo -ne \
 "MLST_Seq_Type\tSeroProf\tClermontPhylotype\tFimType\tVirFactorCount\tVirFactorList\tAqResGeneCount\tAqResGeneList\tMutResGeneCount\tMutResGeneList\t" >> ${metafile}; echo \
 -ne "PlasCount\tPlasList\tSkesaPlasCount\tSkesaPlasList\tSequence_Depth\tAssembly\tEst_Genome\tNreads\tCoverage_Lighter" >> ${metafile}; echo -ne "\tCoverage_Shovill\t" >> \
@@ -318,24 +414,24 @@ else maxrows=0; fi; if [[ $maxrows -gt 0 ]]; then for (( i=0;  i < ${maxrows};  
 -exec grep -H -c '[^[:space:]]' {} \; | sort -nr -t":" -k2 | awk -F: '{print $1; exit;}'); if [ "${#slibrary}" -gt 0 ]; then maxrows=$(sed -n '$=' $avrblastmaxfile)
 else maxrows=0; fi; if [[ $maxrows -gt 0 ]]; then for (( i=0;  i < ${maxrows};  i++ )); do j="$(($i+1))"; echo -ne \
 "avrAlocus${j}\tavrAcontig${j}\tavrAcontig${j}Pos\tavrAident${j}\tavrALlen${j}\tavrAeval${j}\t" >> ${metafile}; done; fi; sed -i 's/\t$//' ${metafile}; echo -e "" >> \
-${metafile}
-#ecoli annotate loop
+${metafile} #ecoli annotate loop below
 if [ "${#elibrary}" -gt 0 ]; then START_TIME=$(date +%s); echo "starting ecoli epidemiologic annotation"; for elib in ${elibrary[*]}; do Species="Escherichia_coli"
-#shovill
 GC=$(apptainer exec $cont stats.sh ${contigfolder}${elib}.fa | sed '2q;d' | cut -f 8); L50=$(apptainer exec $cont stats.sh ${contigfolder}${elib}.fa | sed '8q;d' | cut -f 2 \
-| cut -d/ -f 1); N50=$(apptainer exec $cont stats.sh ${contigfolder}${elib}.fa | sed '8q;d' | cut -f 2 | cut -d/ -f 2); if [[ -f ${shlog}${elib}_shovill.log ]]
-then Assembly_bp=$(awk '/shovill/ && /total_bp/' ${shlog}${elib}_shovill.log | cut -d ' ' -f 6); Sequence_Depth=$(awk '/shovill/ && /depth:/ && /x/' \
-${shlog}${elib}_shovill.log | cut -d ' ' -f 5); Assembly=$(awk '/shovill/ && /Assembly/ && /estimated/' ${shlog}${elib}_shovill.log | cut -d ' ' -f 4 | sed 's/.$//')
-Est_Genome=$(awk '/shovill/ && /Assembly/ && /estimated/' ${shlog}${elib}_shovill.log | cut -d ' ' -f 9); Nreads=$(awk '/lighter/ && /Processed/ && /reads/' \
-${shlog}${elib}_shovill.log | cut -d ' ' -f 3); Ncontigs=$(awk '/shovill/ && /contains/ && /contigs/' ${shlog}${elib}_shovill.log | cut -d ' ' -f 4); Coverage_Lighter=$(awk \
-'/coverage/ && /lighter/' ${shlog}${elib}_shovill.log | cut -d ' ' -f 7); Coverage_Shovill=$(apptainer exec $cont bc <<<"scale=5;$Assembly/$Est_Genome*100")
+| cut -d/ -f 1); N50=$(apptainer exec $cont stats.sh ${contigfolder}${elib}.fa | sed '8q;d' | cut -f 2 | cut -d/ -f 2) #shovill assemblies below
+if [[ -f ${shlog}${elib}_shovill.log ]]; then Assembly_bp=$(awk '/shovill/ && /total_bp/' ${shlog}${elib}_shovill.log | cut -d ' ' -f 6); Sequence_Depth=$(awk \
+'/shovill/ && /depth:/ && /x/' ${shlog}${elib}_shovill.log | cut -d ' ' -f 5); Assembly=$(awk '/shovill/ && /Assembly/ && /estimated/' ${shlog}${elib}_shovill.log | cut -d \
+' ' -f 4 | sed 's/.$//'); Est_Genome=$(awk '/shovill/ && /Assembly/ && /estimated/' ${shlog}${elib}_shovill.log | cut -d ' ' -f 9); Nreads=$(awk \
+'/lighter/ && /Processed/ && /reads/' ${shlog}${elib}_shovill.log | cut -d ' ' -f 3); Ncontigs=$(awk '/shovill/ && /contains/ && /contigs/' ${shlog}${elib}_shovill.log | cut \
+-d ' ' -f 4); Coverage_Lighter=$(awk '/coverage/ && /lighter/' ${shlog}${elib}_shovill.log | cut -d ' ' -f 7); Coverage_Shovill=$(apptainer exec $cont bc \
+<<<"scale=5;$Assembly/$Est_Genome*100"); elif [[ -f ${flog}${elib}.log ]] #flye assemblies below
+then Assembly_bp=$(awk '/Total length:/' ${flog}${elib}.log | cut -f 3); Sequence_Depth=$(awk '/Mean coverage:/' ${flog}${elib}.log | cut -f 3); Assembly=NA; Nreads=$(awk \
+'/Total reads/' ${flog}${elib}.log | cut -d ' ' -f 7); Ncontigs=$(awk '/Fragments:/'  ${flog}${elib}.log | cut -f 3); Coverage_Lighter=NA; Coverage_Shovill=NA #contigs below
 else Assembly_bp=NA; Sequence_Depth=NA; Assembly=NA; Est_Genome=NA; Nreads=NA; Ncontigs=NA; Coverage_Lighter=NA; Coverage_Shovill=NA; fi; OIFS=$IFS; IFS=','
 mlst_summary_array=($(awk -F "\t" 'NR>1 { print$7"," }' ${ecoli_mlst}${elib}_results_tab.tsv)); IFS=$OIFS; delim=""; mlst_summary_string=""; printf \
 -v mlst_summary_string '%s,' "${mlst_summary_array[@]}"; MLST_Allele_Profile=$(echo "${mlst_summary_string%,}" | tr -d '\n'); MLST_Seq_Type=$(awk '/Sequence/ && /Type/' \
 ${ecoli_mlst}${elib}_results.txt | cut -d ' ' -f 3); for (( i=0;  i < 7;  i++ )); do j="$(($i+1))"; k="$(($j+1))"; eval "MLST_Loc_$j"='$(sed "${k}q;d" \
 ${ecoli_mlst}${elib}_results_tab.tsv | cut -f 1)'; eval "MLST_Loc$j""_ID"='$(sed "${k}q;d" ${ecoli_mlst}${elib}_results_tab.tsv |cut -f 2)'; eval "MLST_Loc$j""_Cov"='$(sed \
-"${k}q;d" ${ecoli_mlst}${elib}_results_tab.tsv | cut -f 3)'; eval "MLST_Loc$j""_Allele"='$(sed "${k}q;d" ${ecoli_mlst}${elib}_results_tab.tsv | cut -f 7)'; done
-#serotyping
+"${k}q;d" ${ecoli_mlst}${elib}_results_tab.tsv | cut -f 3)'; eval "MLST_Loc$j""_Allele"='$(sed "${k}q;d" ${ecoli_mlst}${elib}_results_tab.tsv | cut -f 7)'; done #serotyping below
 for (( i=0;  i < 3;  i++ )); do j="$(($i+1))"; if [[ "${j}" -eq 1 ]]; then k=fliC; elif [[ "${j}" -eq 2 ]]; then k=wzx; else k=wzy; fi; eval "Serotype$j"='$(grep \
 -m 1 "${k}" ${serotype}${elib}_sfinder_result.tsv | cut -f 3 | sed "s/[A-Z]//g")'; eval "Antigen$j""ID"='$(grep -m 1 "${k}" ${serotype}${elib}_sfinder_result.tsv | cut -f 4)'
 eval "Antigen$j""_Temp_HSP_Len"='$(grep -m 1 "${k}" ${serotype}${elib}_sfinder_result.tsv | cut -f 5)'; done; Antigen1="H_fliC"; Antigen2="O1_wzx"; Antigen3="O2_wzy"
@@ -367,11 +463,9 @@ ${plasmid}${elib}_plasfinder.tsv | cut -f 3)'; eval "PlasQ_T_Len$j"='$(sed "${k}
 ${plasmid}${elib}_plasfinder.tsv | cut -f 5)'; eval "PlasContig$j""Pos"='$(sed "${k}q;d" ${plasmid}${elib}_plasfinder.tsv | cut -f 6)'; eval "PlasAccNo$j"='$(sed "${k}q;d" \
 ${plasmid}${elib}_plasfinder.tsv | cut -f 8)'; done; if [[ -f ${skesa}${elib}.skesa.fa ]]; then SkesaPlasCount=$(grep -c "Circ" ${skesa}${elib}.skesa.fa)
 skes_summary_array=($(grep "Circ" ${skesa}${elib}.skesa.fa | cut -c 2-)); skes_summary_array=( "${skes_summary_array[@]/%/,}" ); delim=""; skes_summary_string=""; printf -v \
-skes_summary_string '%s,' "${skes_summary_array[@]}"; SkesaPlasList=$(echo "${skes_summary_string%,}" | tr -d '\n'); else SkesaPlasCount=NA; SkesaPlasList=NA; fi
-#fim/clerm
-fim=$(awk '/FimH/ && /type:/' ${fimht}${elib}_fimht_tab.txt |cut -d ' ' -f3); clerm=$(cat ${clermont}${elib}.txt | cut -f2) 
-#blast
-cd ${blast_res}; maxrows=$(sed -n '$=' $clbblastmaxfile); if [[ $maxrows -gt 0 ]]; then for (( i=0;  i < ${maxrows};  i++ )); do j="$(($i+1))"; eval "clbLocus$j"='$(sed \
+skes_summary_string '%s,' "${skes_summary_array[@]}"; SkesaPlasList=$(echo "${skes_summary_string%,}" | tr -d '\n'); else SkesaPlasCount=NA; SkesaPlasList=NA; fi #fim/clerm/5loci below
+fim=$(awk '/FimH/ && /type:/' ${fimht}${elib}_fimht_tab.txt |cut -d ' ' -f3); clerm=$(cat ${clermont}${elib}.txt | cut -f2) ; cd ${blast_res}; maxrows=$(sed -n '$=' \
+$clbblastmaxfile); if [[ $maxrows -gt 0 ]]; then for (( i=0;  i < ${maxrows};  i++ )); do j="$(($i+1))"; eval "clbLocus$j"='$(sed \
 "${j}q;d" ${blast_res}${elib}.${dbname4}blast.txt | cut -f 2 | cut -d '_' -f 1)'; eval "clbContig$j"='$(sed "${j}q;d" ${blast_res}${elib}.${dbname4}blast.txt | cut -f 1)'
 eval "clbContig$j""Pos"='$(sed "${j}q;d" ${blast_res}${elib}.${dbname4}blast.txt | cut -f 7,8 | sed -e "s+\t+..+g")'; eval "clbIdent$j"='$(sed "${j}q;d" \
 ${blast_res}${elib}.${dbname4}blast.txt | cut -f 3)'; eval "clbLen$j"='$(sed "${j}q;d" ${blast_res}${elib}.${dbname4}blast.txt | cut -f 4)'; eval "clbEval$j"='$(sed \
@@ -388,8 +482,7 @@ ${blast_res}${elib}.${dbname2}blast.txt | cut -f 3)'; eval "cdtLen$j"='$(sed "${
 then for (( i=0;  i < ${maxrows};  i++ )); do j="$(($i+1))"; eval "cnfLocus$j"='$(sed "${j}q;d" ${blast_res}${elib}.${dbname5}blast.txt | cut -f 2 | cut -d '_' -f 1)'; eval \
 "cnfContig$j"='$(sed "${j}q;d" ${blast_res}${elib}.${dbname5}blast.txt | cut -f 1)'; eval "cnfContig$j""Pos"='$(sed "${j}q;d" ${blast_res}${elib}.${dbname5}blast.txt | cut \
 -f 7,8 | sed -e "s+\t+..+g")'; eval "cnfIdent$j"='$(sed "${j}q;d" ${blast_res}${elib}.${dbname5}blast.txt | cut -f 3)'; eval "cnfLen$j"='$(sed "${j}q;d" \
-${blast_res}${elib}.${dbname5}blast.txt | cut -f 4)'; eval "cnfEval$j"='$(sed "${j}q;d" ${blast_res}${elib}.${dbname5}blast.txt | cut -f 11)'; done; fi
-#populate metadata
+${blast_res}${elib}.${dbname5}blast.txt | cut -f 4)'; eval "cnfEval$j"='$(sed "${j}q;d" ${blast_res}${elib}.${dbname5}blast.txt | cut -f 11)'; done; fi #pop metadata below
 echo -ne "${elib}\t$Species\t$Assembly_bp\t$Ncontigs\t$GC\t$N50\t$L50\t$MLST_Allele_Profile\t$MLST_Seq_Type\t$SeroProf\t$clerm\t$fim\t$VirFactorCount\t" >> ${metafile}
 echo -ne "$VirFactorList\t$AqResGeneCount\t$AqResGeneList\t$MutResGeneCount\t$MutResGeneList\t$PlasCount\t$PlasList\t$SkesaPlasCount\t$SkesaPlasList\t" >> ${metafile}
 echo -ne "$Sequence_Depth\t$Assembly\t$Est_Genome\t$Nreads\t$Coverage_Lighter\t$Coverage_Shovill\t" >> ${metafile}; for (( i=0;  i < 7;  i++ )); do j="$(($i+1))"
@@ -411,36 +504,32 @@ then for (( i=0;  i < ${maxrows};  i++ )); do j="$(($i+1))"; a=cdtLocus${j}; b=c
 "${!a}\t${!b}\t${!c}\t${!d}\t${!e}\t${!f}\t" >> ${metafile}; done; fi; maxrows=$(sed -n '$=' $cnfblastmaxfile); if [[ $maxrows -gt 0 ]]
 then for (( i=0;  i < ${maxrows};  i++ )); do j="$(($i+1))"; a=cnfLocus${j}; b=cnfContig${j}; c=cnfContig${j}Pos; d=cnfIdent${j}; e=cnfLen${j}; f=cnfEval${j}; echo -ne \
 "${!a}\t${!b}\t${!c}\t${!d}\t${!e}\t${!f}\t" >> ${metafile}; done; fi; sed -i 's/\t$//' ${metafile}; echo -e "" >> ${metafile}; done && wait; END_TIME=$(date +%s); echo \
-"elapsed time for ecoli epidemiologic annotation $(($END_TIME - $START_TIME)) seconds."; fi
-#salmonella annotate loop
+"elapsed time for ecoli epidemiologic annotation $(($END_TIME - $START_TIME)) seconds."; fi #salmonella annotate loop below
 if [ "${#slibrary}" -gt 0 ]; then START_TIME=$(date +%s); echo "starting senterica epidemiologic annotation"; for slib in ${slibrary[*]}; do Species="Salmonella_enterica"
-#shovill
 GC=$(apptainer exec $cont stats.sh ${contigfolder}${slib}.fa | sed '2q;d' | cut -f 8); L50=$(apptainer exec $cont stats.sh ${contigfolder}${slib}.fa | sed '8q;d' | cut \
--f 2 | cut -d/ -f 1); N50=$(apptainer exec $cont stats.sh ${contigfolder}${slib}.fa | sed '8q;d' | cut -f 2 | cut -d/ -f 2); if [[ -f ${shlog}${slib}_shovill.log ]]
-then Assembly_bp=$(awk '/shovill/ && /total_bp/' ${shlog}${slib}_shovill.log | cut -d ' ' -f 6); Sequence_Depth=$(awk \
+-f 2 | cut -d/ -f 1); N50=$(apptainer exec $cont stats.sh ${contigfolder}${slib}.fa | sed '8q;d' | cut -f 2 | cut -d/ -f 2) #shovill assemblies below
+if [[ -f ${shlog}${slib}_shovill.log ]]; then Assembly_bp=$(awk '/shovill/ && /total_bp/' ${shlog}${slib}_shovill.log | cut -d ' ' -f 6); Sequence_Depth=$(awk \
 '/shovill/ && /depth:/ && /x/' ${shlog}${slib}_shovill.log | cut -d ' ' -f 5); Assembly=$(awk '/shovill/ && /Assembly/ && /estimated/' ${shlog}${slib}_shovill.log | cut \
 -d ' ' -f 4 | sed 's/.$//'); Est_Genome=$(awk '/shovill/ && /Assembly/ && /estimated/' ${shlog}${slib}_shovill.log | cut -d ' ' -f 9); Nreads=$(awk \
 '/lighter/ && /Processed/ && /reads/' ${shlog}${slib}_shovill.log | cut -d ' ' -f 3); Ncontigs=$(awk '/shovill/ && /contains/ && /contigs/' ${shlog}${slib}_shovill.log | cut \
 -d ' ' -f 4); Coverage_Lighter=$(awk '/coverage/ && /lighter/' ${shlog}${slib}_shovill.log | cut -d ' ' -f 7); Coverage_Shovill=$(apptainer exec $cont bc \
-<<<"scale=5;$Assembly/$Est_Genome*100"); else Assembly_bp=NA; Sequence_Depth=NA; Assembly=NA; Est_Genome=NA; Nreads=NA; Ncontigs=NA; Coverage_Lighter=NA; Coverage_Shovill=NA
-fi
-#mlst
-OIFS=$IFS; IFS=','; mlst_summary_array=($(awk -F "\t" 'NR>1 { print$7"," }' ${senterica_mlst}${slib}_results_tab.tsv)); IFS=$OIFS; delim=""; mlst_summary_string=""; printf \
+<<<"scale=5;$Assembly/$Est_Genome*100"); elif [[ -f ${flog}${slib}.log ]] #flye assemblies below
+then Assembly_bp=$(awk '/Total length:/' ${flog}${slib}.log | cut -f 3); Sequence_Depth=$(awk '/Mean coverage:/' ${flog}${slib}.log | cut -f 3); Assembly=NA; Nreads=$(awk \
+'/Total reads/' ${flog}${slib}.log | cut -d ' ' -f 7); Ncontigs=$(awk '/Fragments:/'  ${flog}${slib}.log | cut -f 3); Coverage_Lighter=NA; Coverage_Shovill=NA #contigs below
+else Assembly_bp=NA; Sequence_Depth=NA; Assembly=NA; Est_Genome=NA; Nreads=NA; Ncontigs=NA; Coverage_Lighter=NA; Coverage_Shovill=NA; fi; OIFS=$IFS; IFS=',' #mlst below
+mlst_summary_array=($(awk -F "\t" 'NR>1 { print$7"," }' ${senterica_mlst}${slib}_results_tab.tsv)); IFS=$OIFS; delim=""; mlst_summary_string=""; printf \
 -v mlst_summary_string '%s,' "${mlst_summary_array[@]}"; MLST_Allele_Profile=$(echo "${mlst_summary_string%,}" | tr -d '\n'); MLST_Seq_Type=$(awk '/Sequence/ && /Type/' \
 ${senterica_mlst}${slib}_results.txt | cut -d ' ' -f 3); for (( i=0;  i < 7;  i++ )); do j="$(($i+1))"; k="$(($j+1))"; eval "MLST_Loc_$j"='$(sed "${k}q;d" \
 ${senterica_mlst}${slib}_results_tab.tsv | cut -f 1)'; eval "MLST_Loc$j""_ID"='$(sed "${k}q;d" ${senterica_mlst}${slib}_results_tab.tsv | cut -f 2)'; eval \
 "MLST_Loc$j""_Cov"='$(sed "${k}q;d" ${senterica_mlst}${slib}_results_tab.tsv | cut -f 3)'; eval "MLST_Loc$j""_Allele"='$(sed "${k}q;d" \
-${senterica_mlst}${slib}_results_tab.tsv | cut -f 7)'; done
-#serotyping
+${senterica_mlst}${slib}_results_tab.tsv | cut -f 7)'; done #serotyping below
 Antigen1="O"; Antigen2="H1_fliC"; Antigen3="H2_fljB"; Subspecies=$(sed '6q;d' ${serotype}${slib}_seqsero2_result.txt | cut -f 2); SeroName=$(sed '8q;d' \
 ${serotype}${slib}_seqsero2_result.txt | cut -f 2); SeroNote=$(sed '9q;d' ${serotype}${slib}_seqsero2_result.txt | cut -f 2); SeroProf=$(sed '7q;d' \
 ${serotype}${slib}_seqsero2_result.txt | cut -f 2); for (( i=0;  i < 3;  i++ )); do j="$(($i+1))"; k="$(($j+2))"; eval "Serotype$j"='$(sed "${k}q;d" \
-${serotype}${slib}_seqsero2_result.txt | cut -f 2)'; eval "Antigen$j""ID"=''; eval "Antigen$j""_Temp_HSP_Len"=''; done
-#virulence
+${serotype}${slib}_seqsero2_result.txt | cut -f 2)'; eval "Antigen$j""ID"=''; eval "Antigen$j""_Temp_HSP_Len"=''; done #virulence below
 VirFactorCount="" VirFactorList=""; if [ "${#elibrary}" -gt 0 ]; then cd ${virulence}; maxrows=$(sed -n '$=' $virmaxfile); else maxrows=0; fi
 for (( i=0;  i < ${maxrows};  i++ )); do j="$(($i+1))"; eval "VirFactor$j"=""; eval "VirID$j"=""; eval "VirQ_T_Len$j"=""; eval "VirContig$j"=""; eval "VirContig$j""Pos"=""
-eval "VirProtFunc$j"=""; eval "VirAccNo$j"=""; done
-#resistance
+eval "VirProtFunc$j"=""; eval "VirAccNo$j"=""; done #resistance below
 AqResGeneCount=$(($(cut -f1 ${refi}${slib}_tab.tsv | sort | uniq | wc -l) - 1)); OIFS=$IFS; IFS=','; aq_summary_array=($(awk -F "\t" 'NR>1 { print$1"," }' \
 ${refi}${slib}_tab.tsv)); IFS=$OIFS; delim=""; aq_summary_string=""; printf -v aq_summary_string '%s,' "${aq_summary_array[@]}"; AqResGeneList=$(echo \
 "${aq_summary_string%,}" | tr -d '\n'); cd ${refi}; maxrows=$(sed -n '$=' $resmaxfile); for (( i=0;  i < ${maxrows};  i++ )); do j="$(($i+1))"; k="$(($j+1))"; eval \
@@ -452,8 +541,7 @@ ${refi}${slib}_tab.tsv | cut -f 9)'; done; MutResGeneCount=$(($(cut -f1 ${pofs}$
 "${mut_summary_array[@]}"; MutResGeneList=$(echo "${mut_summary_string%,}" | tr -d '\n'); cd ${pofi}; maxrows=$(sed -n '$=' $mutmaxfile); for (( i=0;  i < ${maxrows};  i++ ))
 do j="$(($i+1))"; k="$(($j+1))"; eval "Mutation$j"='$(sed "${k}q;d" ${pofs}${slib}_results.tsv | cut -f 1)'; eval "NucChange$j"='$(sed "${k}q;d" \
 ${pofs}${slib}_results.tsv | cut -f 2)'; eval "AAChange$j"='$(sed "${k}q;d" ${pofs}${slib}_results.tsv | cut -f 3)'; eval "MutRes$j"='$(sed "${k}q;d" \
-${pofs}${slib}_results.tsv | cut -f 4)'; eval "MutPMResID$j"='$(sed "${k}q;d" ${pofs}${slib}_results.tsv | cut -f 5)'; done
-#plasmid, clermont, fim
+${pofs}${slib}_results.tsv | cut -f 4)'; eval "MutPMResID$j"='$(sed "${k}q;d" ${pofs}${slib}_results.tsv | cut -f 5)'; done #plasmid, clermont, fim below
 PlasCount=$(($(cut -f2 ${plasmid}${slib}_plasfinder.tsv | sort | uniq | wc -l) - 1)); OIFS=$IFS; IFS=','; plas_summary_array=($(awk -F "\t" 'NR>1 { print$2"," }' \
 ${plasmid}${slib}_plasfinder.tsv)); IFS=$OIFS; delim=""; plas_summary_string=""; printf -v plas_summary_string '%s,' "${plas_summary_array[@]}"; PlasList=$(echo \
 "${plas_summary_string%,}" | tr -d '\n'); cd ${plasmid}; maxrows=$(sed -n '$=' $plasmaxfile); for (( i=0;  i < ${maxrows};  i++ )); do j="$(($i+1))"; k="$(($j+1))"; eval \
@@ -463,8 +551,7 @@ ${plasmid}${slib}_plasfinder.tsv)); IFS=$OIFS; delim=""; plas_summary_string="";
 "PlasAccNo$j"='$(sed "${k}q;d" ${plasmid}${slib}_plasfinder.tsv | cut -f 7)'; done; if [[ -f ${skesa}${slib}.skesa.fa ]]; then SkesaPlasCount=$(grep -c "Circ" \
 ${skesa}${slib}.skesa.fa); skes_summary_array=($(grep "Circ" ${skesa}${slib}.skesa.fa | cut -c 2-)); skes_summary_array=( "${skes_summary_array[@]/%/,}" ); delim=""
 skes_summary_string=""; printf -v skes_summary_string '%s,' "${skes_summary_array[@]}"; SkesaPlasList=$(echo "${skes_summary_string%,}" | tr -d '\n'); else SkesaPlasCount=NA
-SkesaPlasList=NA; fi; fim="NA"; clerm="NA"
-#blast
+SkesaPlasList=NA; fi; fim="NA"; clerm="NA" #5loci below
 if [ "${#elibrary}" -gt 0 ]; then cd ${blast_res}; maxrows=$(sed -n '$=' $clbblastmaxfile); else maxrows=0; fi; if [[ $maxrows -gt 0 ]]
 then for (( i=0;  i < ${maxrows};  i++ )); do j="$(($i+1))"; eval "clbLocus$j"=""; eval "clbContig$j"=""; eval "clbContig$j""Pos"=""; eval "clbIdent$j"=""; eval "clbLen$j"=""
 eval "clbEval$j"=""; done; fi; if [ "${#elibrary}" -gt 0 ]; then cd ${blast_res}; maxrows=$(sed -n '$=' $cifblastmaxfile); else maxrows=0; fi; if [[ $maxrows -gt 0 ]]
@@ -477,8 +564,7 @@ eval "cnfEval$j"=""; done; fi; cd ${blast_res}; maxrows=$(sed -n '$=' $avrblastm
 eval "avrAlocus$j"='$(sed "${j}q;d" ${blast_res}${slib}.${dbname1}blast.txt | cut -f 2 | cut -d '_' -f 1)'; eval "avrAcontig$j"='$(sed "${j}q;d" \
 ${blast_res}${slib}.${dbname1}blast.txt | cut -f 1)'; eval "avrAcontig$j""Pos"='$(sed "${j}q;d" ${blast_res}${slib}.${dbname1}blast.txt | cut -f 7,8 | sed -e "s+\t+..+g")'
 eval "avrAident$j"='$(sed "${j}q;d" ${blast_res}${slib}.${dbname1}blast.txt | cut -f 3)'; eval "avrAlen$j"='$(sed "${j}q;d" ${blast_res}${slib}.${dbname1}blast.txt | cut \
--f 4)'; eval "avrAeval$j"='$(sed "${j}q;d" ${blast_res}${slib}.${dbname1}blast.txt | cut -f 11)'; done; fi
-#populate metadata
+-f 4)'; eval "avrAeval$j"='$(sed "${j}q;d" ${blast_res}${slib}.${dbname1}blast.txt | cut -f 11)'; done; fi #populate metadata below
 echo -ne "${slib}\t$Species\t$Assembly_bp\t$Ncontigs\t$GC\t$N50\t$L50\t$MLST_Allele_Profile\t$MLST_Seq_Type\t$SeroProf\t$clerm\t$fim\t$VirFactorCount\t" >> ${metafile}
 echo -ne "$VirFactorList\t$AqResGeneCount\t$AqResGeneList\t$MutResGeneCount\t$MutResGeneList\t$PlasCount\t$PlasList\t$SkesaPlasCount\t$SkesaPlasList\t" >> ${metafile}
 echo -ne "$Sequence_Depth\t$Assembly\t$Est_Genome\t$Nreads\t$Coverage_Lighter\t$Coverage_Shovill\t" >> ${metafile}; for (( i=0;  i < 7;  i++ )); do j="$(($i+1))"
@@ -503,46 +589,34 @@ then for (( i=0;  i < ${maxrows};  i++ )); do j="$(($i+1))"; a=cnfLocus${j}; b=c
 "${!a}\t${!b}\t${!c}\t${!d}\t${!e}\t${!f}\t" >> ${metafile}; done; fi; fi; maxrows=$(sed -n '$=' $avrblastmaxfile); if [[ $maxrows -gt 0 ]]
 then for (( i=0;  i < ${maxrows};  i++ )); do j="$(($i+1))"; a=avrAlocus${j}; b=avrAcontig${j}; c=avrAcontig${j}Pos; d=avrAident${j}; e=avrAlen${j}; f=avrAeval${j}; echo -ne \
 "${!a}\t${!b}\t${!c}\t${!d}\t${!e}\t${!f}\t" >> ${metafile}; done; fi; sed -i 's/\t$//' ${metafile}; echo -e "" >> ${metafile}; done && wait; END_TIME=$(date +%s); echo \
-"elapsed time for senterica epidemiologic annotation $(($END_TIME - $START_TIME)) seconds."; fi
-if [ "${#olibrary}" -gt 0 ]; then START_TIME=$(date +%s); echo "starting annotation of low quality and other genomes"; for olib in ${olibrary[*]}; do Species="Unknown"
-#shovill, serotyping, mlst clermont, fim
-GC=$(apptainer exec $cont stats.sh ${contigfolder}${olib}.fa | sed '2q;d' | cut -f 8); L50=$(apptainer exec $cont stats.sh ${contigfolder}${olib}.fa | sed '8q;d' | cut \
--f 2 | cut -d/ -f 1); N50=$(apptainer exec $cont stats.sh ${contigfolder}${olib}.fa | sed '8q;d' | cut -f 2 | cut -d/ -f 2); if [[ -f ${shlog}${olib}_shovill.log ]]
-then Assembly_bp=$(awk '/shovill/ && /total_bp/' ${shlog}${olib}_shovill.log | cut -d ' ' -f 6); Sequence_Depth=$(awk \
+"elapsed time for senterica epidemiologic annotation $(($END_TIME - $START_TIME)) seconds."; fi #unidentified annotate loop below
+if [ "${#olibrary}" -gt 0 ]; then START_TIME=$(date +%s); echo "starting annotation of low quality and other genomes"; for olib in ${olibrary[*]} #stats below
+do Species="Unknown"; GC=$(apptainer exec $cont stats.sh ${contigfolder}${olib}.fa | sed '2q;d' | cut -f 8); L50=$(apptainer exec $cont stats.sh \
+${contigfolder}${olib}.fa | sed '8q;d' | cut -f 2 | cut -d/ -f 1); N50=$(apptainer exec $cont stats.sh ${contigfolder}${olib}.fa | sed '8q;d' | cut -f 2 | cut -d/ -f 2) #below shovill assemblies
+if [[ -f ${shlog}${olib}_shovill.log ]]; then Assembly_bp=$(awk '/shovill/ && /total_bp/' ${shlog}${olib}_shovill.log | cut -d ' ' -f 6); Sequence_Depth=$(awk \
 '/shovill/ && /depth:/ && /x/' ${shlog}${olib}_shovill.log | cut -d ' ' -f 5); Assembly=$(awk '/shovill/ && /Assembly/ && /estimated/' ${shlog}${olib}_shovill.log | cut \
 -d ' ' -f 4 | sed 's/.$//'); Est_Genome=$(awk '/shovill/ && /Assembly/ && /estimated/' ${shlog}${olib}_shovill.log | cut -d ' ' -f 9); Nreads=$(awk \
 '/lighter/ && /Processed/ && /reads/' ${shlog}${olib}_shovill.log | cut -d ' ' -f 3); Ncontigs=$(awk '/shovill/ && /contains/ && /contigs/' ${shlog}${olib}_shovill.log | cut \
 -d ' ' -f 4); Coverage_Lighter=$(awk '/coverage/ && /lighter/' ${shlog}${olib}_shovill.log | cut -d ' ' -f 7); Coverage_Shovill=$(apptainer exec $cont bc \
-<<<"scale=5;$Assembly/$Est_Genome*100"); else Assembly_bp=NA; Sequence_Depth=NA; Assembly=NA; Est_Genome=NA; Nreads=NA; Ncontigs=NA; Coverage_Lighter=NA; Coverage_Shovill=NA
-fi; MLST_Allele_Profile="NA"; MLST_Seq_Type="NA" SeroProf="NA"; fim="NA"; clerm="NA"; VirFactorCount="" VirFactorList=""
-#resistance
+<<<"scale=5;$Assembly/$Est_Genome*100"); elif [[ -f ${flog}${olib}.log ]] #flye assemblies below
+then Assembly_bp=$(awk '/Total length:/' ${flog}${olib}.log | cut -f 3); Sequence_Depth=$(awk '/Mean coverage:/' ${flog}${olib}.log | cut -f 3); Assembly=NA; Nreads=$(awk \
+'/Total reads/' ${flog}${olib}.log | cut -d ' ' -f 7); Ncontigs=$(awk '/Fragments:/'  ${flog}${olib}.log | cut -f 3); Coverage_Lighter=NA; Coverage_Shovill=NA #contigs below
+else Assembly_bp=NA; Sequence_Depth=NA; Assembly=NA; Est_Genome=NA; Nreads=NA; Ncontigs=NA; Coverage_Lighter=NA; Coverage_Shovill=NA; fi #serotyping, mlst clermont, fim below
+MLST_Allele_Profile="NA"; MLST_Seq_Type="NA" SeroProf="NA"; fim="NA"; clerm="NA"; VirFactorCount="" VirFactorList="" #resistance below
 AqResGeneCount=$(($(cut -f1 ${refi}${olib}_tab.tsv | sort | uniq | wc -l) - 1)); OIFS=$IFS; IFS=','; aq_summary_array=($(awk -F "\t" 'NR>1 { print$1"," }' \
 ${refi}${olib}_tab.tsv)); IFS=$OIFS; delim=""; aq_summary_string=""; printf -v aq_summary_string '%s,' "${aq_summary_array[@]}"; AqResGeneList=$(echo \
-"${aq_summary_string%,}" | tr -d '\n'); MutResGeneCount="NA"; MutResGeneList="NA"
-#plasmid
+"${aq_summary_string%,}" | tr -d '\n'); MutResGeneCount="NA"; MutResGeneList="NA" #plasmid below
 PlasCount=$(($(cut -f2 ${plasmid}${olib}_plasfinder.tsv | sort | uniq | wc -l) - 1)); OIFS=$IFS; IFS=','; plas_summary_array=($(awk -F "\t" 'NR>1 { print$2"," }' \
 ${plasmid}${olib}_plasfinder.tsv)); IFS=$OIFS; delim=""; plas_summary_string=""; printf -v plas_summary_string '%s,' "${plas_summary_array[@]}"; PlasList=$(echo \
 "${plas_summary_string%,}" | tr -d '\n'); if [[ -f ${skesa}${olib}.skesa.fa ]]; then SkesaPlasCount=$(grep -c "Circ" ${skesa}${olib}.skesa.fa); skes_summary_array=($(grep \
 "Circ" ${skesa}${olib}.skesa.fa | cut -c 2-)); skes_summary_array=( "${skes_summary_array[@]/%/,}" ); delim=""; skes_summary_string=""; printf -v \
-skes_summary_string '%s,' "${skes_summary_array[@]}"; SkesaPlasList=$(echo "${skes_summary_string%,}" | tr -d '\n'); else SkesaPlasCount=NA; SkesaPlasList=NA; fi
-#populate metadata
+skes_summary_string '%s,' "${skes_summary_array[@]}"; SkesaPlasList=$(echo "${skes_summary_string%,}" | tr -d '\n'); else SkesaPlasCount=NA; SkesaPlasList=NA; fi #below populate metadata
 echo -ne "${olib}\t$Species\t$Assembly_bp\t$Ncontigs\t$GC\t$N50\t$L50\t$MLST_Allele_Profile\t$MLST_Seq_Type\t$SeroProf\t$clerm\t$fim\t$VirFactorCount\t" >> ${metafile}
 echo -ne "$VirFactorList\t$AqResGeneCount\t$AqResGeneList\t$MutResGeneCount\t$MutResGeneList\t$PlasCount\t$PlasList\t$SkesaPlasCount\t$SkesaPlasList\t" >> ${metafile}
 echo -ne "$Sequence_Depth\t$Assembly\t$Est_Genome\t$Nreads\t$Coverage_Lighter\t$Coverage_Shovill" >> ${metafile}; echo -e "" >> ${metafile}; done; wait; END_TIME=$(date +%s)
-echo "elapsed time for annotation of low quality and other genomes $(($END_TIME - $START_TIME)) seconds."; fi
-#clean metadata
+echo "elapsed time for annotation of low quality and other genomes $(($END_TIME - $START_TIME)) seconds."; fi #clean metadata and remove intermediate files below
 START_TIME=$(date +%s); echo "cleaning whitespace and empty columns from epidemiologic annotation"; apptainer exec $cont cp /usr/local/src/metaclean.R $workdir/; cd $result
-apptainer exec $cont Rscript $workdir/metaclean.R; wait; rm $workdir/metaclean.R; END_TIME=$(date +%s); echo \
-"elapsed time to clean epidemiologic annotation $(($END_TIME - $START_TIME)) seconds."
-
-#reduce output folder size. rm grouped. i will need to cherry pick contigs that are not shovill contigs by determining which have an shlog vs which do not.
-START_TIME=$(date +%s); echo "removing intermediate files"; if [ ${lcountB} -ne ${lcountA} ]; then echo -n "${lcountB} libraries before grouping; ${lcountA} libraries after "
-echo "grouping."; rm -rf ${grouped};else rm -rf ${grouped}; fi
-
-#remove input contigs from $contigs that were not assembled by GEA
-unset r; unset b; unset tmp; unset clibrary; r=($(ls ${contigfolder}*.fa 2>/dev/null)); b=(${r[*]##*/}); tmp=(${b[*]%.*}); clibrary=($(printf "%s\n" "${tmp[@]}" | sort -u))
-unset r; unset b; unset tmp; r=($(ls ${shlog}*.log 2>/dev/null)); b=(${r[*]##*/}); tmp=(${b[*]%_shov*}); loglibrary=($(printf "%s\n" "${tmp[@]}" | sort -u)); unset tmp
-tmp=" ${clibrary[*]} "; for i in ${loglibrary[@]}; do tmp=${tmp/ ${i} / }; done; clibrary=( $tmp ); if (( ${#clibrary[@]} != 0 )); then for i in ${clibrary[*]}; do rm \
-${contigfolder}${i}.fa; done; fi; END_TIME=$(date +%s); echo -n "elapsed time for removing intermediate files "; echo "$(($END_TIME - $START_TIME)) seconds"
-
-echo "program finished normally"; exit 0
+apptainer exec $cont Rscript $workdir/metaclean.R; wait; rm $workdir/metaclean.R; END_TIME=$(date +%s); echo -n "elapsed time to clean epidemiologic annotation "; echo \
+"$(($END_TIME - $START_TIME)) seconds."; START_TIME=$(date +%s); echo "removing intermediate files"; if [ -d "$grouped" ]; then rm -rf ${grouped}; fi; if [ -d "$groupedL" ]
+then rm -rf ${groupedL}; fi ; if [ -d "$contigdir_userFA" ]; then rm -rf ${contigdir_userFA}; fi; END_TIME=$(date +%s); echo -n "elapsed time for removing intermediate files "
+echo "$(($END_TIME - $START_TIME)) seconds"; echo "program finished normally"; exit 0
